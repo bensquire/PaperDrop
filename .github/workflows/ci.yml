@@ -22,6 +22,12 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-sane-${{ runner.os }}
+
       - name: Install SANE (vendored into the bundle)
         run: brew install sane-backends
 

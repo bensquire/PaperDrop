@@ -29,10 +29,12 @@ public final class SANECLIBackend: ScannerBackend {
             // These are read by libsane's own code (not dyld), so they
             // survive hardened runtime. Dylib resolution itself works via
             // the @rpath entries baked in by scripts/vendor-sane.sh.
-            saneEnvironment = [
+            // Pre-merged with the app environment once; Process.environment
+            // replaces the inherited environment wholesale.
+            saneEnvironment = ProcessInfo.processInfo.environment.merging([
                 "SANE_CONFIG_DIR": contents.appendingPathComponent("Resources/sane.d").path,
                 "LD_LIBRARY_PATH": contents.appendingPathComponent("Frameworks/sane").path,
-            ]
+            ]) { _, new in new }
         } else {
             let candidates = ["/opt/homebrew/bin/scanimage", "/usr/local/bin/scanimage"]
             scanimage = candidates.first { FileManager.default.fileExists(atPath: $0) }
@@ -47,6 +49,8 @@ public final class SANECLIBackend: ScannerBackend {
         guard
             let out = try? await runAsync(
                 scanimage, ["-f", "%d|%v %m%n"],
+                // Floor: a full SANE probe genuinely takes up to ~15 s;
+                // shorter caller timeouts would just guarantee failure.
                 timeout: max(timeout, 15)
             )
         else { return [] }
@@ -114,9 +118,7 @@ public final class SANECLIBackend: ScannerBackend {
         guard let p, p.isRunning else { return false }
         p.terminate()
         try? await Task.sleep(nanoseconds: 1_000_000_000)
-        let tokens =
-            scannerName
-            .replacingOccurrences(of: "(SANE)", with: "")
+        let tokens = ScannerInfo(id: "", name: scannerName).baseName
             .split(separator: " ").map(String.init)
         let reset = USBReset.resetDevice(nameTokens: tokens)
         if reset {
@@ -130,7 +132,6 @@ public final class SANECLIBackend: ScannerBackend {
         with scanner: ScannerInfo, config: ScanConfig,
         to directory: URL
     ) async throws -> URL {
-        guard scanimage != nil else { throw ScanError.noDevice }
         withProcessLock { cancelRequested = false }
         // resolveDevice → discover already releases any hijacked USB device.
         guard let device = await resolveDevice(matching: scanner) else {
@@ -212,13 +213,10 @@ public final class SANECLIBackend: ScannerBackend {
             p.standardOutput = out
             p.standardError = err
             if let saneEnvironment {
-                p.environment = ProcessInfo.processInfo.environment
-                    .merging(saneEnvironment) { _, new in new }
+                p.environment = saneEnvironment
             }
             if track {
-                processLock.lock()
-                currentScanProcess = p
-                processLock.unlock()
+                withProcessLock { currentScanProcess = p }
             }
             // Enforce the timeout (probes can hang when a legacy driver
             // holds the USB device). Scans pass a generous timeout — never
@@ -230,9 +228,7 @@ public final class SANECLIBackend: ScannerBackend {
             }
             p.terminationHandler = { [weak self] proc in
                 if track, let self {
-                    processLock.lock()
-                    currentScanProcess = nil
-                    processLock.unlock()
+                    self.withProcessLock { self.currentScanProcess = nil }
                 }
                 let stdout =
                     String(

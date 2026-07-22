@@ -1,6 +1,6 @@
 APP := apps/PaperDrop
 
-.PHONY: test lint format build bundle release clean
+.PHONY: test lint format bundle release clean
 
 test:
 	cd $(APP) && swift test
@@ -11,9 +11,6 @@ lint:
 
 format:
 	cd $(APP) && swift format --in-place --recursive Sources Tests Package.swift
-
-build:
-	cd $(APP) && swift build -c release -Xswiftc -Osize
 
 bundle:
 	$(APP)/bundle.sh

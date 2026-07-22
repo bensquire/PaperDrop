@@ -23,13 +23,18 @@ final class AppModel: ObservableObject {
     @Published var errorText: String?
     @Published var docName = ""
 
+    private static let dpiKey = "dpi"
+    private static let dpiFallback = 300
+
     /// Persistent default (Settings); the toolbar picker edits the
     /// session-only `dpi` below so a one-off override doesn't stick.
-    @AppStorage("dpi") var defaultDpi = 300
+    @AppStorage(AppModel.dpiKey) var defaultDpi = AppModel.dpiFallback
     @Published var dpi: Int
 
     init() {
-        dpi = UserDefaults.standard.object(forKey: "dpi") as? Int ?? 300
+        dpi =
+            UserDefaults.standard.object(forKey: Self.dpiKey) as? Int
+            ?? Self.dpiFallback
     }
 
     @AppStorage("photoMode") var photoMode = false
@@ -38,14 +43,23 @@ final class AppModel: ObservableObject {
     @AppStorage("uniformPages") var uniformPages = true
     @AppStorage("paperChoice") var paperChoice = "auto"
 
-    static let fixedPapers: [(key: String, label: String, wMM: Double, hMM: Double)] = [
-        ("a4", "A4", 210, 297),
-        ("a5", "A5", 148, 210),
-        ("4x6", "4×6″", 101.6, 152.4),
-        ("5x7", "5×7″", 127, 177.8),
-        ("8x10", "8×10″", 203.2, 254),
-        ("letter", "Letter", 215.9, 279.4),
-    ]
+    /// Toolbar paper choices, derived from Pipeline's tables so paper
+    /// dimensions have exactly one home. Keys are stable for the
+    /// persisted "paperChoice" preference ("4×6″" → "4x6").
+    static let fixedPapers: [(key: String, label: String, wMM: Double, hMM: Double)] = {
+        let all = Pipeline.paperSizesMM + Pipeline.photoSizesMM
+        let order = ["A4", "A5", "4×6″", "5×7″", "8×10″", "Letter"]
+        return order.compactMap { name in
+            all.first { $0.name == name }.map {
+                (
+                    key: name.lowercased()
+                        .replacingOccurrences(of: "×", with: "x")
+                        .replacingOccurrences(of: "″", with: ""),
+                    label: name, wMM: $0.w, hMM: $0.h
+                )
+            }
+        }
+    }()
 
     var fixedPaperMM: (w: Double, h: Double)? {
         Self.fixedPapers.first { $0.key == paperChoice }
@@ -130,10 +144,6 @@ final class AppModel: ObservableObject {
         statusText = "Scanning page \(pages.count + 1)…"
         let backend = backend(for: scanner)
         let config = ScanConfig(dpi: dpi, mode: .gray)
-        let photo = photoMode
-        let snap = paperSnap
-        let fixed = fixedPaperMM
-        let workDir = workDir
 
         Task {
             do {
@@ -146,8 +156,8 @@ final class AppModel: ObservableObject {
                 )
                 let item = try await Self.process(
                     url: url, dpi: config.dpi,
-                    photo: photo, snap: snap,
-                    fixed: fixed
+                    photo: photoMode, snap: paperSnap,
+                    fixed: fixedPaperMM
                 )
                 self.pages.append(item)
                 self.statusText = "Page \(self.pages.count): \(item.sizeLabel), \(item.mmSize)"
@@ -291,7 +301,7 @@ final class AppModel: ObservableObject {
                 )
                 let dest = dir.appendingPathComponent(fileName)
                 try data.write(to: dest)
-                await MainActor.run { [weak self] in
+                await MainActor.run {
                     self?.pages = []
                     self?.docName = ""
                     self?.saving = false
@@ -299,7 +309,7 @@ final class AppModel: ObservableObject {
                     NSWorkspace.shared.activateFileViewerSelecting([dest])
                 }
             } catch {
-                await MainActor.run { [weak self] in
+                await MainActor.run {
                     self?.saving = false
                     self?.errorText = error.localizedDescription
                 }

@@ -8,12 +8,7 @@ cd "$(dirname "$0")"
 ./bundle.sh
 
 DMG=PaperDrop.dmg
-rm -f $DMG
-STAGE=$(mktemp -d)
-cp -R PaperDrop.app "$STAGE/"
-ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname PaperDrop -srcfolder "$STAGE" -format UDZO -quiet $DMG
-rm -rf "$STAGE"
+scripts/make-dmg.sh PaperDrop.app $DMG
 
 if xcrun notarytool history --keychain-profile paperdrop >/dev/null 2>&1; then
     echo "notarizing…"

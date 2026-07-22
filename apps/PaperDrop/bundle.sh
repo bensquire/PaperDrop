@@ -44,11 +44,14 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 EOF
-# Sign inside-out: every vendored Mach-O first, then the app.
-for f in $APP/Contents/Helpers/scanimage \
-         $APP/Contents/Frameworks/*.dylib \
-         $APP/Contents/Frameworks/sane/*.so; do
-    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
-done
+# Sign inside-out: every vendored Mach-O first (one batched invocation —
+# each --timestamp call makes a network round-trip), then the app.
+# NOTE: the Helpers/Frameworks/Resources layout here is mirrored in
+# SANECLIBackend.swift (bundled scanimage + SANE env paths) and the CI
+# verify step — keep the three in sync.
+codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+    $APP/Contents/Helpers/scanimage \
+    $APP/Contents/Frameworks/*.dylib \
+    $APP/Contents/Frameworks/sane/*.so
 codesign --force --options runtime --timestamp --sign "$IDENTITY" $APP
 echo "built and signed $PWD/$APP (v$VERSION)"

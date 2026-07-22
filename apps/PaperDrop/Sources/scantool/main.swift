@@ -5,6 +5,10 @@ import ScanKit
 //   scantool list
 //   scantool caps
 //   scantool scan <out-dir> [dpi] [bw|gray|color]
+//   scantool process <in.tiff> <out.pdf> [dpi] [padWxH] [fixed:WxH]
+//     padWxH   pad the page to WxH mm (e.g. 210x297)
+//     fixed:WxH  force the paper size instead of auto-detecting
+//   scantool usbreset [name tokens…]
 
 let args = CommandLine.arguments
 let command = args.count > 1 ? args[1] : "list"
@@ -101,7 +105,8 @@ Task {
         print("reset:", USBReset.resetDevice(nameTokens: tokens))
     default:
         print(
-            "usage: scantool list|caps|scan [dir] [dpi] [mode] | process <in> <out> | usbreset [tokens]"
+            "usage: scantool list|caps|scan [dir] [dpi] [mode] | "
+                + "process <in> <out> [dpi] [padWxH] [fixed:WxH] | usbreset [tokens]"
         )
     }
 }

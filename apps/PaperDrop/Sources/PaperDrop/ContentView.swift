@@ -105,16 +105,7 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
             if model.scanning {
                 ProgressView()
-                Button(role: .destructive) {
-                    model.cancelScan()
-                } label: {
-                    Label("Cancel Scan", systemImage: "stop.circle")
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .hoverHighlight()
+                cancelScanButton("Cancel Scan", large: true)
             } else {
                 Button(action: model.scanPage) {
                     Label("Scan First Page", systemImage: "scanner")
@@ -180,13 +171,7 @@ struct ContentView: View {
                 if model.scanning {
                     ProgressView()
                     Text("Scanning…").font(.callout)
-                    Button(role: .destructive) {
-                        model.cancelScan()
-                    } label: {
-                        Label("Cancel", systemImage: "stop.circle")
-                    }
-                    .buttonStyle(.bordered)
-                    .hoverHighlight()
+                    cancelScanButton("Cancel", large: false)
                 } else {
                     Image(systemName: "plus.viewfinder")
                         .font(.system(size: 34, weight: .thin))
@@ -204,6 +189,19 @@ struct ContentView: View {
         .hoverHighlight(scale: 1.01)
         .disabled(model.busy)
         .keyboardShortcut(.defaultAction)
+    }
+
+    private func cancelScanButton(_ title: String, large: Bool) -> some View {
+        Button(role: .destructive) {
+            model.cancelScan()
+        } label: {
+            Label(title, systemImage: "stop.circle")
+                .padding(.horizontal, large ? 10 : 0)
+                .padding(.vertical, large ? 4 : 0)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(large ? .large : .regular)
+        .hoverHighlight()
     }
 
     // MARK: Save bar

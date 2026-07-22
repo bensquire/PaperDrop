@@ -3,7 +3,7 @@ name: Release
 # Cuts a signed + notarized DMG and publishes it as a GitHub Release.
 # Trigger: push a tag matching `v*` (e.g. `git tag v0.1.0 && git push --tags`).
 #
-# Required repository secrets (same names as AudiobookForge):
+# Required repository secrets:
 #   SIGNING_CERTIFICATE_P12_BASE64  Developer ID Application cert, p12, base64
 #   SIGNING_CERTIFICATE_PASSWORD    p12 password
 #   APPLE_TEAM_ID                   e.g. SZHK3JVH6J
@@ -51,6 +51,12 @@ jobs:
           echo "version=$VERSION"                 >> "$GITHUB_OUTPUT"
           echo "numeric_version=$NUMERIC_VERSION" >> "$GITHUB_OUTPUT"
           echo "prerelease=$IS_PRERELEASE"        >> "$GITHUB_OUTPUT"
+
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-sane-${{ runner.os }}
 
       - name: Install SANE (vendored into the bundle)
         run: brew install sane-backends
@@ -115,11 +121,7 @@ jobs:
         run: |
           mkdir -p dist
           DMG="dist/PaperDrop-${{ steps.ver.outputs.version }}.dmg"
-          STAGE=$(mktemp -d)
-          cp -R apps/PaperDrop/PaperDrop.app "$STAGE/"
-          ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname PaperDrop -srcfolder "$STAGE" \
-            -format UDZO -quiet "$DMG"
+          apps/PaperDrop/scripts/make-dmg.sh apps/PaperDrop/PaperDrop.app "$DMG"
           codesign --sign "Developer ID Application" --timestamp "$DMG"
           xcrun notarytool submit "$DMG" \
             --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" \
