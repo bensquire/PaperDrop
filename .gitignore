@@ -1,0 +1,8 @@
+venv/
+.build/
+*.tiff
+*.pdf
+.DS_Store
+__pycache__/
+PaperDrop.app/
+PaperDrop.dmg

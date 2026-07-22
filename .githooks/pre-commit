@@ -1,0 +1,13 @@
+#!/bin/zsh
+# Pre-commit: lint + tests (enable with: git config core.hooksPath .githooks)
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+echo "swift format lint…"
+(cd apps/PaperDrop && swift format lint --strict --recursive Sources Tests Package.swift)
+
+echo "swift test…"
+(cd apps/PaperDrop && swift test --quiet)
+
+echo "python compile check…"
+python3 -m py_compile engine/*.py
