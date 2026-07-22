@@ -1,61 +1,154 @@
-# scantools
+<div align="center">
 
-Scanning toolkit for the Canon CanoScan LiDE 110 on macOS, built on SANE
-(`brew install sane-backends`) because Canon's driver is dead and Image
-Capture barely works with it.
+<img src="images/icon.png" alt="PaperDrop icon" width="128"/>
 
-## Layout
+# PaperDrop
 
-- `engine/` — Python pipeline. Document scanning (`scandoc.py` and friends)
-  is the original prototype, superseded by the Swift port in ScanKit (which
-  has since gained multi-blob crop, ink-mass trimming, and layout-preserving
-  placement the Python side lacks) — kept for CLI use, not maintained in
-  lockstep. Photo stacking (`scanstack2.py`/`remerge.py`) is still canonical
-  here; it has no Swift port yet.
-  - `scandoc.py` — documents → compact 1-bit G4 PDF (~20 KB/page): Otsu
-    threshold, bed-edge removal, despeckle, content-cluster crop, standard
-    paper-size snap
-  - `scanpage.py` / `makepdf.py` — single-page scan and PDF assembly
-    (entry points used by the PaperDrop app)
-  - `scanstack2.py` — photos → multi-pass 16-bit stack with sub-pixel
-    alignment (noise ≈ ÷√N)
-  - `remerge.py` — re-merge saved passes without rescanning
-- `apps/PaperDrop/` — minimal SwiftUI document-archiver app
+**A tiny native macOS scanner app that turns paper into searchable,
+archival PDFs — one big button, ~20 KB per page.**
 
-Setup: `python3 -m venv venv && ./venv/bin/pip install -r requirements.txt`
+[![CI](https://img.shields.io/github/actions/workflow/status/bensquire/PaperDrop/ci.yml?branch=main&label=ci&logo=github&cacheSeconds=300)](https://github.com/bensquire/PaperDrop/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/actions/workflow/status/bensquire/PaperDrop/release.yml?label=release&logo=github&cacheSeconds=300)](https://github.com/bensquire/PaperDrop/actions/workflows/release.yml)
+[![Latest](https://img.shields.io/github/v/release/bensquire/PaperDrop?include_prereleases&label=latest&logo=apple&cacheSeconds=300)](https://github.com/bensquire/PaperDrop/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-007aff?logo=apple)](https://www.apple.com/macos/)
+[![Swift](https://img.shields.io/badge/swift-5.9-f05138?logo=swift)](https://swift.org)
+[![License](https://img.shields.io/github/license/bensquire/PaperDrop?label=license&cacheSeconds=300)](LICENSE)
+
+[**Download latest →**](https://github.com/bensquire/PaperDrop/releases/latest) ·
+[Releases](https://github.com/bensquire/PaperDrop/releases)
+
+</div>
+
+Scan a page, get a page card. Scan a few more, drag them into order, name
+the document, hit Save — a compressed, OCR-searchable PDF lands in
+`~/Documents/Scans` and Finder shows it to you. That's the whole app,
+on purpose.
+
+## What it does
+
+- **Tiny archival PDFs** — pages are thresholded to pure black & white
+  (Otsu), cleaned of scanner-bed edges and dust, and stored as CCITT G4
+  fax compression inside the PDF: **~20 KB per A4 page** at 300 dpi.
+- **Searchable** — an invisible text layer via Apple's Vision OCR makes
+  every PDF findable in Spotlight and searchable in Preview. No cloud,
+  no external OCR tools.
+- **Knows what paper you used** — auto-detects and snaps to A4 / A5 /
+  A6 / Letter (metric wins ties), or force a size from the toolbar
+  (A4, A5, 4×6″, 5×7″, 8×10″, Letter). Multi-page documents can be
+  padded to a uniform page size, preserving each page's original layout.
+- **Photo mode** — grayscale JPEG pages for photos, pencil, and anything
+  hard black-and-white would destroy.
+- **Two scanner backends** — Apple's ImageCaptureCore for anything macOS
+  supports natively (including AirScan/eSCL network scanners), and SANE
+  for legacy USB scanners whose vendor drivers died years ago. Same
+  physical device visible through both? It's deduplicated and the
+  working backend wins.
+- **Battle-hardened against cranky hardware** — per-scan forced
+  calibration, stale-USB-address re-resolution with retry, automatic
+  release of legacy vendor drivers that grab exclusive USB ownership,
+  and a Cancel button that software-resets the scanner (a programmatic
+  unplug/replug) instead of leaving it wedged.
+- **Dependency-free** — a single ~400 KB signed binary using only system
+  frameworks. The one exception: SANE scanners currently need
+  `brew install sane-backends` (bundling libsane is on the roadmap).
+
+## Install
+
+Grab the DMG from the [latest release](https://github.com/bensquire/PaperDrop/releases/latest),
+drag PaperDrop into Applications. Signed and notarized — first launch is
+silent.
+
+Using a legacy USB scanner (Canon LiDE and friends)? Also run:
+
+```sh
+brew install sane-backends
+```
+
+## Build from source
+
+Requires only Xcode (or the Command Line Tools) — no Homebrew, no
+package managers, no third-party Swift dependencies.
+
+```sh
+git clone https://github.com/bensquire/PaperDrop.git
+cd PaperDrop
+make bundle                 # builds + signs apps/PaperDrop/PaperDrop.app
+open apps/PaperDrop/PaperDrop.app
+```
 
 ## Development
 
-- `make test` — XCTest suite (AAA style, `test_subject_expectation` naming)
-  over the ScanKit pipeline
-- `make lint` / `make format` — Apple's toolchain-bundled `swift format`
-  (config: `.swift-format`); no external tools required
-- `make bundle` / `make release` — signed app bundle / notarized DMG
-- Pre-commit hook runs lint + tests + Python compile check:
-  `git config core.hooksPath .githooks` (already set locally)
+```sh
+make test      # XCTest suite over the ScanKit pipeline (AAA style)
+make lint      # Apple's toolchain-bundled `swift format` in lint mode
+make format    # auto-format
+make release   # signed DMG (+ notarization if a `paperdrop` keychain
+               # profile is stored)
+```
 
-## Scanner facts (LiDE 110 + SANE genesys, learned empirically)
+A pre-commit hook (`git config core.hooksPath .githooks`) runs lint +
+tests + a Python compile check.
 
-| Resolution | Verdict |
-|---|---|
-| 75–300 | fine; ~20 s full bed |
-| 600 | sweet spot for prints; 35 s |
-| 1200 | best real quality; 93 s |
-| 2400 | works but ~10 min; overkill for prints |
-| 4800 | **broken**: 2× vertical stretch and 2× offset error; also horizontally interpolated |
+## Project layout
 
-Operational rules:
+```
+apps/PaperDrop/
+├── Package.swift              # SwiftPM: ScanKit lib + app + CLI
+├── Sources/ScanKit/           # The engine — reusable, UI-free
+│   ├── Pipeline.swift         #   Otsu, cleanup, crop, paper-size snap
+│   ├── G4.swift               #   CCITT G4 via ImageIO + TIFF stream extraction
+│   ├── PDFWriter.swift        #   minimal PDF writer (G4 + JPEG + OCR layer)
+│   ├── OCR.swift              #   Vision text recognition
+│   ├── ICCBackend.swift       #   ImageCaptureCore scanner backend
+│   ├── SANECLIBackend.swift   #   SANE backend + scanner-reliability lore
+│   └── USBReset.swift         #   software unplug/replug via IOUSBHost
+├── Sources/PaperDrop/         # SwiftUI app
+├── Sources/scantool/          # headless CLI test harness
+├── Tests/ScanKitTests/        # unit tests
+└── icon/makeicon.swift        # generates the app icon from code
+engine/                        # original Python prototype (see engine/README.md)
+.github/workflows/             # ci.yml (lint+test+smoke), release.yml (signed DMG)
+```
 
-- **Always `--force-calibration`.** The calibration cache mis-applies and
-  causes heavy RGB column striping.
-- **Never kill a scan mid-pass.** It wedges the scanner (dark, striped,
-  geometry-broken output) until a USB power-cycle (unplug/replug — it is
-  USB-powered).
-- The carriage pauses mid-scan while USB buffers drain at high dpi —
-  stop-and-go is normal, not a hang.
-- Between-pass registration offsets are real: sub-pixel vertically, and
-  occasionally quantised jumps (±32/±64 px at 2400 dpi) from calibration
-  cropping. The stacker measures and corrects them (cap: 30 px).
-- 16-bit output is genuine (`--depth 16`); mode list is Color/Gray only,
-  no hardware lineart, no exposure control (so HDR multi-exposure is out;
-  multi-pass averaging is the available trick).
+## How a page becomes 20 KB
+
+1. Scan grayscale at 300 dpi (the OCR sweet spot) via the selected
+   backend.
+2. **Otsu threshold** to 1-bit, then connected-component cleanup: ink
+   touching the scan border is bed-edge shadow (removed), specks under
+   4 px are dust (removed).
+3. **Content-cluster crop** — ink is dilated so paragraphs merge into
+   blobs; every blob with meaningful ink survives (a lone signature box
+   far below a table is content, a fleck isn't). Outlier tails holding
+   <0.3% of ink can't veto the paper-size decision.
+4. **Paper-size snap** to the nearest standard size, anchored so content
+   keeps its physical position on the page.
+5. **CCITT G4** encoding (ImageIO), embedded losslessly in a
+   hand-rolled PDF writer, plus the Vision OCR words as an invisible,
+   position-matched text layer.
+
+## Releasing
+
+```sh
+# one-time: add 6 GitHub Secrets (cert, password, team ID, 3× notary creds)
+git tag v0.1.0 && git push origin v0.1.0
+# → GitHub Actions lints, tests, builds, signs (Developer ID), notarizes
+#   app + DMG, staples both, and publishes a GitHub Release.
+```
+
+Secret names match my other repos (AudiobookForge) — see the header of
+[.github/workflows/release.yml](.github/workflows/release.yml).
+
+## Improvement ideas
+
+- [ ] Bundle libsane — drop the Homebrew requirement for legacy scanners
+- [ ] Colour photo mode (scanner + pipeline support it; the app doesn't ask yet)
+- [ ] Per-document output folder override
+- [ ] ScanStudio — the full Image Capture replacement (multi-pass photo
+  stacking with sub-pixel alignment already works in `engine/`)
+- [ ] Sparkle auto-updates from GitHub Releases
+
+## License
+
+**[MIT](LICENSE)** — use it, fork it, ship whatever; just keep the
+copyright notice.
