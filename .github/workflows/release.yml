@@ -52,6 +52,9 @@ jobs:
           echo "numeric_version=$NUMERIC_VERSION" >> "$GITHUB_OUTPUT"
           echo "prerelease=$IS_PRERELEASE"        >> "$GITHUB_OUTPUT"
 
+      - name: Install SANE (vendored into the bundle)
+        run: brew install sane-backends
+
       - name: Lint and test
         run: |
           make lint
@@ -147,8 +150,18 @@ jobs:
             echo "2. Open it and drag PaperDrop into Applications"
             echo "3. Launch — first launch is silent (notarized by Apple)"
             echo
-            echo "SANE scanners (e.g. Canon LiDE series) additionally need"
-            echo "\`brew install sane-backends\` until libsane is bundled."
+            echo "---"
+            echo
+            echo "### Open-source components"
+            echo
+            SANE_VER=$(cat apps/PaperDrop/Vendor/sane/VERSION 2>/dev/null || echo "sane-backends")
+            echo "PaperDrop bundles **SANE** (\`$SANE_VER\`) — scanimage, libsane,"
+            echo "and all backends — so legacy USB scanners work with no other"
+            echo "installs. SANE is licensed under the **GPL v2** (backends carry"
+            echo "a linking exception); it runs as a separate helper process and"
+            echo "PaperDrop's own source remains MIT. License texts ship inside"
+            echo "the app (Contents/Resources/licenses) and upstream source is at"
+            echo "<https://gitlab.com/sane-project/backends>."
           } > release_notes.md
 
       - name: Publish GitHub Release

@@ -11,13 +11,24 @@ cd "$(dirname "$0")"
 VERSION="${VERSION:-0.1.0}"
 IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application: BENJAMIN RICHARD SOUIRE (SZHK3JVH6J)}"
 
+# Vendored SANE stack (scanimage + libsane + backends) — see
+# scripts/vendor-sane.sh. Rebuilt from Homebrew when absent.
+[[ -d Vendor/sane ]] || scripts/vendor-sane.sh
+
 swift build -c release -Xswiftc -Osize
 APP=PaperDrop.app
 rm -rf $APP
-mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
+mkdir -p $APP/Contents/MacOS $APP/Contents/Resources \
+    $APP/Contents/Helpers $APP/Contents/Frameworks/sane
 cp .build/release/PaperDrop $APP/Contents/MacOS/
 strip -rSTx $APP/Contents/MacOS/PaperDrop
 cp icon/PaperDrop.icns $APP/Contents/Resources/
+cp Vendor/sane/bin/scanimage $APP/Contents/Helpers/
+cp Vendor/sane/lib/*.dylib $APP/Contents/Frameworks/
+cp Vendor/sane/lib/sane/*.so $APP/Contents/Frameworks/sane/
+cp -R Vendor/sane/etc/sane.d $APP/Contents/Resources/
+cp -R Vendor/sane/licenses $APP/Contents/Resources/
+cp Vendor/sane/VERSION $APP/Contents/Resources/licenses/SANE-VERSION
 cat > $APP/Contents/Info.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -33,5 +44,11 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 EOF
+# Sign inside-out: every vendored Mach-O first, then the app.
+for f in $APP/Contents/Helpers/scanimage \
+         $APP/Contents/Frameworks/*.dylib \
+         $APP/Contents/Frameworks/sane/*.so; do
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+done
 codesign --force --options runtime --timestamp --sign "$IDENTITY" $APP
 echo "built and signed $PWD/$APP (v$VERSION)"

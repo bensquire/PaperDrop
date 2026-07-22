@@ -1,11 +1,14 @@
 import Foundation
 
-/// Interim SANE backend that shells out to a scanimage binary (Homebrew).
-/// Carries the LiDE 110 reliability lore: force-calibration on every scan,
-/// and never kill a scan mid-pass. Step 5 replaces the transport with
-/// bundled libsane; the interface stays the same.
+/// SANE backend that shells out to scanimage — preferring the copy
+/// bundled inside the app (Contents/Helpers, with its own libsane +
+/// backends), falling back to Homebrew. Carries the LiDE 110 reliability
+/// lore: force-calibration on every scan, never kill a scan mid-pass.
 public final class SANECLIBackend: ScannerBackend {
     private let scanimage: URL?
+    /// SANE env vars pointing the bundled scanimage at the bundled
+    /// configs and backends. nil when using a system scanimage.
+    private let saneEnvironment: [String: String]?
     private let processLock = NSLock()
     private var currentScanProcess: Process?
     private var cancelRequested = false
@@ -19,9 +22,23 @@ public final class SANECLIBackend: ScannerBackend {
     }
 
     public init() {
-        let candidates = ["/opt/homebrew/bin/scanimage", "/usr/local/bin/scanimage"]
-        scanimage = candidates.first { FileManager.default.fileExists(atPath: $0) }
-            .map { URL(fileURLWithPath: $0) }
+        let contents = Bundle.main.bundleURL.appendingPathComponent("Contents")
+        let bundled = contents.appendingPathComponent("Helpers/scanimage")
+        if FileManager.default.fileExists(atPath: bundled.path) {
+            scanimage = bundled
+            // These are read by libsane's own code (not dyld), so they
+            // survive hardened runtime. Dylib resolution itself works via
+            // the @rpath entries baked in by scripts/vendor-sane.sh.
+            saneEnvironment = [
+                "SANE_CONFIG_DIR": contents.appendingPathComponent("Resources/sane.d").path,
+                "LD_LIBRARY_PATH": contents.appendingPathComponent("Frameworks/sane").path,
+            ]
+        } else {
+            let candidates = ["/opt/homebrew/bin/scanimage", "/usr/local/bin/scanimage"]
+            scanimage = candidates.first { FileManager.default.fileExists(atPath: $0) }
+                .map { URL(fileURLWithPath: $0) }
+            saneEnvironment = nil
+        }
     }
 
     public func discover(timeout: TimeInterval) async -> [ScannerInfo] {
@@ -194,6 +211,10 @@ public final class SANECLIBackend: ScannerBackend {
             let out = Pipe(), err = Pipe()
             p.standardOutput = out
             p.standardError = err
+            if let saneEnvironment {
+                p.environment = ProcessInfo.processInfo.environment
+                    .merging(saneEnvironment) { _, new in new }
+            }
             if track {
                 processLock.lock()
                 currentScanProcess = p

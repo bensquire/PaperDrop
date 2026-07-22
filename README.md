@@ -48,31 +48,28 @@ on purpose.
   release of legacy vendor drivers that grab exclusive USB ownership,
   and a Cancel button that software-resets the scanner (a programmatic
   unplug/replug) instead of leaving it wedged.
-- **Dependency-free** — a single ~400 KB signed binary using only system
-  frameworks. The one exception: SANE scanners currently need
-  `brew install sane-backends` (bundling libsane is on the roadmap).
+- **Batteries included** — the full SANE stack (all 85 backends) ships
+  inside the app, so legacy USB scanners work straight from the DMG
+  with zero installs. The app itself is pure Swift on system frameworks;
+  ~17 MB all-in.
 
 ## Install
 
 Grab the DMG from the [latest release](https://github.com/bensquire/PaperDrop/releases/latest),
 drag PaperDrop into Applications. Signed and notarized — first launch is
-silent.
-
-Using a legacy USB scanner (Canon LiDE and friends)? Also run:
-
-```sh
-brew install sane-backends
-```
+silent. Nothing else to install, even for ancient USB scanners.
 
 ## Build from source
 
-Requires only Xcode (or the Command Line Tools) — no Homebrew, no
-package managers, no third-party Swift dependencies.
+Xcode plus — for the bundled scanner stack — a one-time
+`brew install sane-backends` (its binaries get vendored and relocated
+into the app by `scripts/vendor-sane.sh`). No third-party Swift
+dependencies.
 
 ```sh
 git clone https://github.com/bensquire/PaperDrop.git
 cd PaperDrop
-make bundle                 # builds + signs apps/PaperDrop/PaperDrop.app
+make bundle                 # vendors SANE, builds + signs PaperDrop.app
 open apps/PaperDrop/PaperDrop.app
 ```
 
@@ -140,7 +137,7 @@ Secret names match my other repos (AudiobookForge) — see the header of
 
 ## Improvement ideas
 
-- [ ] Bundle libsane — drop the Homebrew requirement for legacy scanners
+- [x] Bundle libsane — legacy scanners work with zero installs
 - [ ] Colour photo mode (scanner + pipeline support it; the app doesn't ask yet)
 - [ ] Per-document output folder override
 - [ ] ScanStudio — the full Image Capture replacement (multi-pass photo
@@ -151,3 +148,13 @@ Secret names match my other repos (AudiobookForge) — see the header of
 
 **[MIT](LICENSE)** — use it, fork it, ship whatever; just keep the
 copyright notice.
+
+### Third-party components
+
+Release builds bundle the **SANE** scanner stack (`scanimage`, `libsane`,
+and all backends) from [sane-project](https://gitlab.com/sane-project/backends),
+relocated into the app by `scripts/vendor-sane.sh`. SANE is **GPL v2**
+(backends carry a linking exception); it runs as a separate helper
+process, so PaperDrop's own source remains MIT. The GPL license texts
+ship inside the app at `Contents/Resources/licenses`, and each release's
+notes state the exact bundled version with upstream source links.
