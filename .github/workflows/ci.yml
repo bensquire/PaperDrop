@@ -28,9 +28,6 @@ jobs:
       - name: Test
         run: make test
 
-      - name: Python compile check
-        run: python3 -m py_compile engine/*.py
-
       - name: Smoke bundle (ad-hoc signed)
         env:
           CODESIGN_IDENTITY: "-"

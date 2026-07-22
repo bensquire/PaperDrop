@@ -106,7 +106,6 @@ apps/PaperDrop/
 ├── Sources/scantool/          # headless CLI test harness
 ├── Tests/ScanKitTests/        # unit tests
 └── icon/makeicon.swift        # generates the app icon from code
-engine/                        # original Python prototype (see engine/README.md)
 .github/workflows/             # ci.yml (lint+test+smoke), release.yml (signed DMG)
 ```
 
@@ -145,7 +144,7 @@ Secret names match my other repos (AudiobookForge) — see the header of
 - [ ] Colour photo mode (scanner + pipeline support it; the app doesn't ask yet)
 - [ ] Per-document output folder override
 - [ ] ScanStudio — the full Image Capture replacement (multi-pass photo
-  stacking with sub-pixel alignment already works in `engine/`)
+  stacking with sub-pixel alignment already prototyped)
 - [ ] Sparkle auto-updates from GitHub Releases
 
 ## License

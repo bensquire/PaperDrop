@@ -8,6 +8,3 @@ echo "swift format lint…"
 
 echo "swift test…"
 (cd apps/PaperDrop && swift test --quiet)
-
-echo "python compile check…"
-python3 -m py_compile engine/*.py
