@@ -40,9 +40,9 @@ jobs:
       - name: Smoke bundle (ad-hoc signed)
         env:
           CODESIGN_IDENTITY: "-"
-        run: apps/PaperDrop/bundle.sh
+        run: ./bundle.sh
 
       - name: Verify vendored SANE relocation
         run: |
-          apps/PaperDrop/scripts/vendor-sane.sh --verify
-          test -x apps/PaperDrop/PaperDrop.app/Contents/Helpers/scanimage
+          scripts/vendor-sane.sh --verify
+          test -x PaperDrop.app/Contents/Helpers/scanimage

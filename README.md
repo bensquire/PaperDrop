@@ -74,7 +74,7 @@ dependencies.
 git clone https://github.com/bensquire/PaperDrop.git
 cd PaperDrop
 make bundle                 # vendors SANE, builds + signs PaperDrop.app
-open apps/PaperDrop/PaperDrop.app
+open PaperDrop.app
 ```
 
 ## Development
@@ -93,21 +93,21 @@ tests + a Python compile check.
 ## Project layout
 
 ```
-apps/PaperDrop/
-├── Package.swift              # SwiftPM: ScanKit lib + app + CLI
-├── Sources/ScanKit/           # The engine — reusable, UI-free
-│   ├── Pipeline.swift         #   Otsu, cleanup, crop, paper-size snap
-│   ├── G4.swift               #   CCITT G4 via ImageIO + TIFF stream extraction
-│   ├── PDFWriter.swift        #   minimal PDF writer (G4 + JPEG + OCR layer)
-│   ├── OCR.swift              #   Vision text recognition
-│   ├── ICCBackend.swift       #   ImageCaptureCore scanner backend
-│   ├── SANECLIBackend.swift   #   SANE backend + scanner-reliability lore
-│   └── USBReset.swift         #   software unplug/replug via IOUSBHost
-├── Sources/PaperDrop/         # SwiftUI app
-├── Sources/scantool/          # headless CLI test harness
-├── Tests/ScanKitTests/        # unit tests
-└── icon/makeicon.swift        # generates the app icon from code
-.github/workflows/             # ci.yml (lint+test+smoke), release.yml (signed DMG)
+Package.swift              # SwiftPM: ScanKit lib + app + CLI
+Sources/ScanKit/           # The engine — reusable, UI-free
+├── Pipeline.swift         #   Otsu, cleanup, crop, paper-size snap
+├── G4.swift               #   CCITT G4 via ImageIO + TIFF stream extraction
+├── PDFWriter.swift        #   minimal PDF writer (G4 + JPEG + OCR layer)
+├── OCR.swift              #   Vision text recognition
+├── ICCBackend.swift       #   ImageCaptureCore scanner backend
+├── SANECLIBackend.swift   #   SANE backend + scanner-reliability lore
+└── USBReset.swift         #   software unplug/replug via IOUSBHost
+Sources/PaperDrop/         # SwiftUI app
+Sources/scantool/          # headless CLI test harness
+Tests/ScanKitTests/        # unit tests
+icon/makeicon.swift        # generates the app icon from code
+scripts/                   # vendor-sane.sh, make-dmg.sh
+.github/workflows/         # ci.yml (lint+test+smoke), release.yml (signed DMG)
 ```
 
 ## How a page becomes 20 KB
