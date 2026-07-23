@@ -135,15 +135,6 @@ git tag v0.1.0 && git push origin v0.1.0
 Secret names match my other repos (AudiobookForge) — see the header of
 [.github/workflows/release.yml](.github/workflows/release.yml).
 
-## Improvement ideas
-
-- [x] Bundle libsane — legacy scanners work with zero installs
-- [ ] Colour photo mode (scanner + pipeline support it; the app doesn't ask yet)
-- [ ] Per-document output folder override
-- [ ] ScanStudio — the full Image Capture replacement (multi-pass photo
-  stacking with sub-pixel alignment already prototyped)
-- [ ] Sparkle auto-updates from GitHub Releases
-
 ## License
 
 **[MIT](LICENSE)** — use it, fork it, ship whatever; just keep the
