@@ -17,6 +17,10 @@ archival PDFs — one big button, ~20 KB per page.**
 [**Download latest →**](https://github.com/bensquire/PaperDrop/releases/latest) ·
 [Releases](https://github.com/bensquire/PaperDrop/releases)
 
+<br/>
+
+<img src="images/screenshot.png" alt="PaperDrop — scanned page cards, one-click scanning, save to searchable PDF" width="900"/>
+
 </div>
 
 Scan a page, get a page card. Scan a few more, drag them into order, name
