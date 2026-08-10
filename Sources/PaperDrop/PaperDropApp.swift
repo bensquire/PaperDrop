@@ -9,6 +9,9 @@ struct PaperDropApp: App {
             ContentView()
                 .environmentObject(model)
         }
+        // Hides the title text; the window keeps its name for the Window
+        // menu and Mission Control.
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .newItem) {
                 Button("Scan Page") { model.scanPage() }

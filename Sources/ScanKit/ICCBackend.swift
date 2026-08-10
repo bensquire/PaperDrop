@@ -4,11 +4,17 @@ import Foundation
 /// ImageCaptureCore backend — drives any scanner macOS supports
 /// (local ICA/TWAIN devices and AirScan/eSCL network scanners).
 public final class ICCBackend: ScannerBackend {
+    /// One browser for the backend's lifetime, and the sole owner of it.
+    /// ImageCaptureCore posts blocks to the main thread that outlive a
+    /// browse and retain the ICDeviceBrowser when they run, so a per-call
+    /// browser that deallocates on return crashes in objc_retain; releasing
+    /// it also invalidates the devices it handed out, mid-session.
+    private let browser = DeviceBrowser()
+
     public init() {}
 
     public func discover(timeout: TimeInterval) async -> [ScannerInfo] {
-        let browser = DeviceBrowser()
-        return await browser.browse(for: timeout).map {
+        await browser.browse(for: timeout).map {
             ScannerInfo(
                 id: $0.persistentIDString ?? $0.name ?? UUID().uuidString,
                 name: $0.name ?? "Unknown scanner"
@@ -40,14 +46,13 @@ public final class ICCBackend: ScannerBackend {
     }
 
     private func openSession(for scanner: ScannerInfo) async throws -> ScanSession {
-        let browser = DeviceBrowser()
         let devices = await browser.browse(for: 8)
         guard
             let device = devices.first(where: {
                 ($0.persistentIDString ?? $0.name) == scanner.id || $0.name == scanner.name
             })
         else { throw ScanError.noDevice }
-        let session = ScanSession(device: device, keepAlive: browser)
+        let session = ScanSession(device: device)
         try await session.open()
         return session
     }
@@ -58,10 +63,13 @@ public final class ICCBackend: ScannerBackend {
 private final class DeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecked Sendable {
     private let browser = ICDeviceBrowser()
     private var found: [ICScannerDevice] = []
-    private var continuation: CheckedContinuation<[ICScannerDevice], Never>?
+    private var waiting: [CheckedContinuation<[ICScannerDevice], Never>] = []
     private let lock = NSLock()
 
-    func browse(for timeout: TimeInterval) async -> [ICScannerDevice] {
+    /// The browser outlives every browse, so its delegate and device mask
+    /// are one-time setup rather than per-call configuration.
+    override init() {
+        super.init()
         browser.delegate = self
         browser.browsedDeviceTypeMask = ICDeviceTypeMask(
             rawValue: ICDeviceTypeMask.scanner.rawValue
@@ -69,31 +77,50 @@ private final class DeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecked
                 | ICDeviceLocationTypeMask.shared.rawValue
                 | ICDeviceLocationTypeMask.bonjour.rawValue
         )!
-        browser.start()
-        return await withCheckedContinuation { cont in
-            lock.lock()
-            continuation = cont
-            lock.unlock()
+    }
+
+    /// A caller arriving while a browse is in flight joins it rather than
+    /// restarting the shared browser — cancelling the running one would
+    /// hand its caller an empty device list. The first caller's timeout
+    /// governs; a browse is short and both callers want the same answer.
+    func browse(for timeout: TimeInterval) async -> [ICScannerDevice] {
+        await withCheckedContinuation { cont in
+            let startBrowse = lock.withLock { () -> Bool in
+                waiting.append(cont)
+                guard waiting.count == 1 else { return false }
+                found.removeAll()
+                return true
+            }
+            guard startBrowse else { return }
+            browser.start()
             DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
                 self?.finish()
             }
         }
     }
 
+    /// Both the early-stop and the timeout path call this; whichever claims
+    /// the waiters stops the browser and answers them all. Clearing `found`
+    /// here releases the ImageCaptureCore devices rather than holding them
+    /// until the next browse.
     private func finish() {
-        lock.lock()
-        let cont = continuation
-        continuation = nil
-        lock.unlock()
+        let (waiters, devices) = lock.withLock {
+            defer {
+                waiting.removeAll()
+                found.removeAll()
+            }
+            return (waiting, found)
+        }
+        guard !waiters.isEmpty else { return }
         browser.stop()
-        cont?.resume(returning: found)
+        for cont in waiters {
+            cont.resume(returning: devices)
+        }
     }
 
     func deviceBrowser(_: ICDeviceBrowser, didAdd device: ICDevice, moreComing: Bool) {
         if let scanner = device as? ICScannerDevice {
-            lock.lock()
-            found.append(scanner)
-            lock.unlock()
+            lock.withLock { found.append(scanner) }
             // Local scanners arrive fast; stop early when the browser says so.
             if !moreComing {
                 finish()
@@ -108,8 +135,6 @@ private final class DeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecked
 
 private final class ScanSession: NSObject, ICScannerDeviceDelegate, @unchecked Sendable {
     private let device: ICScannerDevice
-    /// Retain the browser: releasing it invalidates its devices mid-session.
-    private let keepAlive: AnyObject
 
     private var openCont: CheckedContinuation<Void, Error>?
     private var selectCont: CheckedContinuation<ICScannerFunctionalUnit, Error>?
@@ -117,9 +142,8 @@ private final class ScanSession: NSObject, ICScannerDeviceDelegate, @unchecked S
     private var scannedURL: URL?
     private let lock = NSLock()
 
-    init(device: ICScannerDevice, keepAlive: AnyObject) {
+    init(device: ICScannerDevice) {
         self.device = device
-        self.keepAlive = keepAlive
         super.init()
         device.delegate = self
     }

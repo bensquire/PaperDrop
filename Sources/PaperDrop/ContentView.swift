@@ -39,6 +39,8 @@ struct ContentView: View {
             statusBar
         }
         .frame(minWidth: 560, minHeight: 460)
+        // No toolbar background or hairline, so content runs to the top.
+        .toolbarBackground(.hidden, for: .windowToolbar)
         .toolbar { toolbarContent }
         .onAppear { model.discoverScanners() }
     }
@@ -59,11 +61,9 @@ struct ContentView: View {
                 readyToScanState
             }
             Spacer()
-            if !model.discovering {
-                // Content states sit slightly above centre; the bare
-                // spinner looks off unless truly centred.
-                Spacer()
-            }
+            // Two spacers below, one above: every state sits slightly above
+            // centre, so finishing a search doesn't jump the content.
+            Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -223,10 +223,9 @@ struct ContentView: View {
             Button {
                 model.savePDF()
             } label: {
-                Label(
-                    model.saving ? "Saving…" : "Save PDF",
-                    systemImage: "square.and.arrow.down"
-                )
+                // Constant label: a changing one would shift Discard
+                // mid-save, and the status bar already shows progress.
+                Label("Save PDF", systemImage: "square.and.arrow.down")
             }
             .buttonStyle(.borderedProminent)
             .hoverHighlight()
@@ -270,8 +269,13 @@ struct ContentView: View {
 
     // MARK: Toolbar
 
+    /// Menu pickers size themselves to the selected label, so inline ones
+    /// reflow the toolbar on every change. The scan settings sit behind a
+    /// constant ellipsis instead, and the scanner picker gets a fixed width
+    /// so a long device name truncates rather than shoving its neighbours.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        // Leading: what you scan with. Trailing: how you scan.
         ToolbarItemGroup {
             Picker("Scanner", selection: $model.selectedScannerID) {
                 if model.scanners.isEmpty {
@@ -284,7 +288,9 @@ struct ContentView: View {
             }
             .pickerStyle(.menu)
             .buttonStyle(.borderless)
-            .frame(minWidth: 170)
+            .frame(width: 150)
+            .lineLimit(1)
+            .truncationMode(.middle)
 
             Button {
                 model.discoverScanners()
@@ -293,47 +299,52 @@ struct ContentView: View {
             }
             .help("Look for scanners again")
             .disabled(model.discovering)
+        }
 
-            Picker("Resolution", selection: $model.dpi) {
-                ForEach(model.availableDPIs, id: \.self) { d in
-                    Text("\(d) dpi").tag(d)
+        // macOS 26 only; earlier releases keep every item at the trailing
+        // edge, which is the layout they had before this split.
+        if #available(macOS 26.0, *) {
+            ToolbarSpacer(.flexible)
+        }
+
+        ToolbarItem {
+            Menu {
+                Picker("Mode", selection: $model.photoMode) {
+                    Label("Document", systemImage: "doc.text").tag(false)
+                    Label("Photo", systemImage: "photo").tag(true)
                 }
-            }
-            .pickerStyle(.menu)
-            .buttonStyle(.borderless)
-            .help("Scan resolution")
 
-            Picker("Paper", selection: $model.paperChoice) {
-                Text("Auto size").tag("auto")
                 Divider()
-                ForEach(AppModel.fixedPapers, id: \.key) { paper in
-                    Text(paper.label).tag(paper.key)
+
+                Picker("Resolution", selection: $model.dpi) {
+                    ForEach(model.availableDPIs, id: \.self) { d in
+                        Text("\(d) dpi").tag(d)
+                    }
                 }
-            }
-            .pickerStyle(.menu)
-            .buttonStyle(.borderless)
-            .help("Auto-detect the paper size, or force a specific one")
 
-            // Only meaningful alongside a forced size — auto-detect derives
-            // orientation from the page it found.
-            Picker("Orientation", selection: $model.paperLandscape) {
-                Image(systemName: "rectangle.portrait").tag(false)
-                Image(systemName: "rectangle").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .disabled(model.fixedPaperMM == nil)
-            .help("Portrait or landscape for the forced paper size")
+                Picker("Paper", selection: $model.paperChoice) {
+                    Text("Auto size").tag("auto")
+                    Divider()
+                    ForEach(AppModel.fixedPapers, id: \.key) { paper in
+                        Text(paper.label).tag(paper.key)
+                    }
+                }
 
-            // Segmented control; per-segment .help doesn't work reliably on
-            // macOS, so one combined tooltip describes both.
-            Picker("Mode", selection: $model.photoMode) {
-                Label("Document", systemImage: "doc.text").tag(false)
-                Label("Photo", systemImage: "photo").tag(true)
+                // Only meaningful alongside a forced size — auto-detect
+                // derives orientation from the page it found.
+                Picker("Orientation", selection: $model.paperLandscape) {
+                    Text("Portrait").tag(false)
+                    Text("Landscape").tag(true)
+                }
+                .disabled(model.fixedPaperMM == nil)
+            } label: {
+                Image(systemName: "ellipsis")
             }
-            .pickerStyle(.segmented)
-            .help(
-                "Document (left): pure black & white, tiny PDF. "
-                    + "Photo (right): grayscale JPEG pages, keeps shading.")
+            // .button keeps the capsule the bare ellipsis would otherwise
+            // lose; .hidden drops the disclosure chevron beside it.
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .help("Mode, resolution, paper size and orientation")
         }
     }
 }
