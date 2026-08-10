@@ -127,23 +127,63 @@ final class ContentCropTests: XCTestCase {
         XCTAssertEqual(mm(c.y1 - c.y0), 297, accuracy: 3)
     }
 
-    func test_contentCrop_fixedSizeOrientsToLandscapeContent() throws {
-        // Arrange — content wider than tall (a landscape photo)
+    func test_contentCrop_fixedSizeRotatesWhenContentCannotFit() throws {
+        // Arrange — content wider than 5x7 portrait (a landscape photo)
         let gray = makeGray(
             bedW: 216.7, bedH: 300,
             inkRectsMM: [
                 CGRect(x: 20, y: 20, width: 160, height: 100)
             ])
 
-        // Act — force 5x7 inch paper
+        // Act — force 5x7 inch paper, portrait
         let crop = Pipeline.contentCrop(
             cleanedBinary(gray), dpi: dpi,
             fixedMM: (w: 127, h: 177.8))
 
-        // Assert — landscape orientation (177.8 wide, 127 tall)
+        // Assert — rotated to landscape, the only way the content fits
         let c = try XCTUnwrap(crop)
         XCTAssertEqual(mm(c.x1 - c.x0), 177.8, accuracy: 3)
         XCTAssertEqual(mm(c.y1 - c.y0), 127, accuracy: 3)
+    }
+
+    func test_contentCrop_fixedA4KeepsPortraitForWideInk() throws {
+        // Arrange — a portrait A4 sheet whose ink is wider than tall
+        // (letterhead plus a paragraph, empty lower half)
+        let gray = makeGray(
+            bedW: 216, bedH: 297,
+            inkRectsMM: [
+                CGRect(x: 20, y: 20, width: 170, height: 120)
+            ])
+
+        // Act — force A4
+        let crop = Pipeline.contentCrop(
+            cleanedBinary(gray), dpi: dpi,
+            fixedMM: (w: 210, h: 297))
+
+        // Assert — full-height portrait page, not a landscape band that
+        // discards the bottom third of the sheet
+        let c = try XCTUnwrap(crop)
+        XCTAssertEqual(mm(c.x1 - c.x0), 210, accuracy: 3)
+        XCTAssertEqual(mm(c.y1 - c.y0), 297, accuracy: 3)
+    }
+
+    func test_contentCrop_fixedSizeHonoursRequestedLandscape() throws {
+        // Arrange — ink taller than wide, but small enough to fit either way
+        let gray = makeGray(
+            bedW: 216, bedH: 297,
+            inkRectsMM: [
+                CGRect(x: 20, y: 20, width: 100, height: 130)
+            ])
+
+        // Act — force A5 landscape
+        let crop = Pipeline.contentCrop(
+            cleanedBinary(gray), dpi: dpi,
+            fixedMM: (w: 210, h: 148))
+
+        // Assert — the requested orientation wins over the ink's shape
+        let c = try XCTUnwrap(crop)
+        XCTAssertEqual(mm(c.x1 - c.x0), 210, accuracy: 3)
+        XCTAssertEqual(mm(c.y1 - c.y0), 148, accuracy: 3)
     }
 
     func test_contentCrop_keepsDistantSparseContent() throws {

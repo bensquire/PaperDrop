@@ -42,6 +42,7 @@ final class AppModel: ObservableObject {
     @AppStorage("paperSnap") var paperSnap = true
     @AppStorage("uniformPages") var uniformPages = true
     @AppStorage("paperChoice") var paperChoice = "auto"
+    @AppStorage("paperLandscape") var paperLandscape = false
 
     /// Toolbar paper choices, derived from Pipeline's tables so paper
     /// dimensions have exactly one home. Keys are stable for the
@@ -61,9 +62,11 @@ final class AppModel: ObservableObject {
         }
     }()
 
+    /// The forced page size, or nil for auto-detect. Paper tables are
+    /// portrait, so landscape is the same pair swapped.
     var fixedPaperMM: (w: Double, h: Double)? {
         Self.fixedPapers.first { $0.key == paperChoice }
-            .map { ($0.wMM, $0.hMM) }
+            .map { paperLandscape ? ($0.hMM, $0.wMM) : ($0.wMM, $0.hMM) }
     }
 
     @AppStorage("archivePath") var archivePath =

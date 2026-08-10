@@ -314,6 +314,16 @@ struct ContentView: View {
             .buttonStyle(.borderless)
             .help("Auto-detect the paper size, or force a specific one")
 
+            // Only meaningful alongside a forced size — auto-detect derives
+            // orientation from the page it found.
+            Picker("Orientation", selection: $model.paperLandscape) {
+                Image(systemName: "rectangle.portrait").tag(false)
+                Image(systemName: "rectangle").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .disabled(model.fixedPaperMM == nil)
+            .help("Portrait or landscape for the forced paper size")
+
             // Segmented control; per-segment .help doesn't work reliably on
             // macOS, so one combined tooltip describes both.
             Picker("Mode", selection: $model.photoMode) {

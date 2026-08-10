@@ -145,6 +145,8 @@ public enum Pipeline {
         }
     }
 
+    /// Portrait-normalised (w <= h) — snapping, naming and the app's
+    /// landscape toggle all get the other orientation by swapping the pair.
     public static let paperSizesMM: [(name: String, w: Double, h: Double)] = [
         ("A6", 105, 148), ("A5", 148, 210), ("A4", 210, 297), ("Letter", 216, 279),
     ]
@@ -270,20 +272,23 @@ public enum Pipeline {
         let (tx0, tx1) = trim(colMass, x0, x1)
         let (ty0, ty1) = trim(rowMass, y0, y1)
 
-        // Explicit paper size: exactly that size, oriented to match the
-        // content's shape, anchored at the content's top-left.
+        // Explicit paper size: exactly that size in the orientation the
+        // caller asked for, anchored at the content's top-left. The only
+        // override is content that plainly cannot fit that way round but
+        // fits rotated — a wrong orientation must never chop the page.
         if let f = fixedMM {
             let pxPerMM = Double(dpi) / 25.4
             var (tw, th) = (f.w, f.h)
-            if ((tx1 - tx0) >= (ty1 - ty0)) != (tw >= th) {
+            let cw = Double(tx1 - tx0) / pxPerMM
+            let ch = Double(ty1 - ty0) / pxPerMM
+            let fitsAsIs = cw <= tw && ch <= th
+            let fitsRotated = cw <= th && ch <= tw
+            if !fitsAsIs, fitsRotated {
                 swap(&tw, &th)
             }
-            let tpw = Int(tw * pxPerMM), tph = Int(th * pxPerMM)
-            let nx0 = min(max(0, tx0 - m), max(0, w - tpw))
-            let ny0 = min(max(0, ty0 - m), max(0, h - tph))
-            return Crop(
-                x0: nx0, y0: ny0,
-                x1: min(w, nx0 + tpw), y1: min(h, ny0 + tph)
+            return paperCrop(
+                anchorX: tx0 - m, anchorY: ty0 - m,
+                wMM: tw, hMM: th, imageW: w, imageH: h, dpi: dpi
             )
         }
 
@@ -319,6 +324,25 @@ public enum Pipeline {
         return nil
     }
 
+    /// A page-sized window anchored at the content's margined top-left and
+    /// clamped inside the scan. The grown area extends toward bottom/right,
+    /// like the physical page does from the bed origin. Both the forced size
+    /// and auto-snap place their page this way — one home for the policy.
+    static func paperCrop(
+        anchorX: Int, anchorY: Int,
+        wMM: Double, hMM: Double,
+        imageW: Int, imageH: Int, dpi: Int
+    ) -> Crop {
+        let pxPerMM = Double(dpi) / 25.4
+        let tpw = Int(wMM * pxPerMM), tph = Int(hMM * pxPerMM)
+        let nx0 = min(max(0, anchorX), max(0, imageW - tpw))
+        let ny0 = min(max(0, anchorY), max(0, imageH - tph))
+        return Crop(
+            x0: nx0, y0: ny0,
+            x1: min(imageW, nx0 + tpw), y1: min(imageH, ny0 + tph)
+        )
+    }
+
     static func snapToPaper(
         _ c: Crop, imageW: Int, imageH: Int, dpi: Int,
         slackMM: Double
@@ -333,15 +357,9 @@ public enum Pipeline {
             guard wMM <= tw, tw <= wMM + slackMM,
                 hMM <= th, th <= hMM + slackMM
             else { continue }
-            let tpw = Int(tw * pxPerMM), tph = Int(th * pxPerMM)
-            // Anchor at the content's detected top-left (preserving its
-            // margins); the grown area extends toward bottom/right, like
-            // the physical page does from the bed origin.
-            let nx0 = min(c.x0, max(0, imageW - tpw))
-            let ny0 = min(c.y0, max(0, imageH - tph))
-            return Crop(
-                x0: nx0, y0: ny0,
-                x1: min(imageW, nx0 + tpw), y1: min(imageH, ny0 + tph)
+            return paperCrop(
+                anchorX: c.x0, anchorY: c.y0,
+                wMM: tw, hMM: th, imageW: imageW, imageH: imageH, dpi: dpi
             )
         }
         return nil
