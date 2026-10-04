@@ -67,6 +67,17 @@ public enum ImageEncode {
         )
     }
 
+    /// A downscaled preview read straight from encoded image data; ImageIO
+    /// decodes only what it needs.
+    public static func thumbnail(of data: Data, maxPixelSize: Int) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
     static func encode(
         _ image: CGImage, uti: CFString,
         properties: [CFString: Any]

@@ -15,12 +15,12 @@ public enum G4 {
         guard
             let data = ImageEncode.encode(
                 img, uti: UTType.tiff.identifier as CFString,
+                // The compression key is documented only as metadata
+                // (/documentation/imageio/kcgimagepropertytiffcompression);
+                // ImageIO honours it, and extractStream checks the result.
+                // The top-level DPI keys also write the TIFF resolution tags.
                 properties: [
-                    kCGImagePropertyTIFFDictionary: [
-                        kCGImagePropertyTIFFCompression: 4,
-                        kCGImagePropertyTIFFXResolution: dpi,
-                        kCGImagePropertyTIFFYResolution: dpi,
-                    ],
+                    kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFCompression: 4],
                     kCGImagePropertyDPIWidth: dpi,
                     kCGImagePropertyDPIHeight: dpi,
                 ]
@@ -61,7 +61,7 @@ public enum G4 {
         }
         let ifd = u32(4)
         let count = u16(ifd)
-        var width = 0, height = 0, photometric = 0, compression = 0
+        var width = 0, height = 0, photometric = 0, compression = 0, fillOrder = 1
         var stripOffset = -1, stripBytes = -1, stripCount = 0
         for i in 0..<count {
             let e = ifd + 2 + i * 12
@@ -72,6 +72,7 @@ public enum G4 {
             case 257: height = value
             case 259: compression = value
             case 262: photometric = value
+            case 266: fillOrder = value
             case 273:
                 stripCount = n
                 stripOffset = n == 1 ? value : u32(e + 8)
@@ -81,6 +82,8 @@ public enum G4 {
         }
         guard compression == 4 else { throw fail("not G4 (compression \(compression))") }
         guard stripCount == 1 else { throw fail("multi-strip (\(stripCount))") }
+        // PDF's CCITTFaxDecode reads the bits most significant first.
+        guard fillOrder == 1 else { throw fail("fill order \(fillOrder)") }
         guard stripOffset >= 0, stripBytes > 0,
             stripOffset + stripBytes <= tiff.count
         else { throw fail("bad strip") }

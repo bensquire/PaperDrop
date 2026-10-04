@@ -25,7 +25,8 @@ extension View {
 }
 
 struct ContentView: View {
-    @EnvironmentObject var model: AppModel
+    @Bindable var model: AppModel
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,9 +41,12 @@ struct ContentView: View {
         }
         .frame(minWidth: 560, minHeight: 460)
         // No toolbar background or hairline, so content runs to the top.
-        .toolbarBackground(.hidden, for: .windowToolbar)
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .toolbar { toolbarContent }
-        .onAppear { model.discoverScanners() }
+        .onAppear {
+            model.undoManager = undoManager
+            model.discoverScanners()
+        }
     }
 
     // MARK: Empty state
@@ -146,7 +150,18 @@ struct ContentView: View {
                     PageCell(page: page, number: idx + 1) {
                         model.deletePage(page.id)
                     }
+                    // Reordering for those who can't drag.
+                    .accessibilityAction(named: "Move Earlier") {
+                        model.movePage(id: page.id, by: -1)
+                    }
+                    .accessibilityAction(named: "Move Later") {
+                        model.movePage(id: page.id, by: 1)
+                    }
                     .opacity(draggingID == page.id ? 0.4 : 1)
+                    // onDrag, not draggable(_:): only draggable drags report
+                    // their end (onDragSessionUpdated), but a synthetic
+                    // drag that reordered with onDrag did nothing with
+                    // draggable, so the switch waits for a hand test.
                     .onDrag {
                         draggingID = page.id
                         return NSItemProvider(object: page.id.uuidString as NSString)
@@ -210,6 +225,9 @@ struct ContentView: View {
         .buttonStyle(.bordered)
         .controlSize(large ? .large : .regular)
         .hoverHighlight()
+        // Escape cancels the action in progress
+        // (/documentation/swiftui/keyboardshortcut/cancelaction).
+        .keyboardShortcut(.cancelAction)
     }
 
     // MARK: Save bar
@@ -304,50 +322,24 @@ struct ContentView: View {
             Button {
                 model.discoverScanners()
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Label("Search for Scanners", systemImage: "arrow.clockwise")
+                    .labelStyle(.iconOnly)
             }
             .help("Look for scanners again")
             .disabled(model.discovering)
         }
 
-        // macOS 26 only; earlier releases keep every item at the trailing
-        // edge, which is the layout they had before this split.
-        if #available(macOS 26.0, *) {
-            ToolbarSpacer(.flexible)
-        }
+        ToolbarSpacer(.flexible)
 
         ToolbarItem {
             Menu {
-                Picker("Mode", selection: $model.photoMode) {
-                    Label("Document", systemImage: "doc.text").tag(false)
-                    Label("Photo", systemImage: "photo").tag(true)
-                }
-
-                Divider()
-
-                Picker("Resolution", selection: $model.dpi) {
-                    ForEach(model.availableDPIs, id: \.self) { d in
-                        Text("\(d) dpi").tag(d)
-                    }
-                }
-
-                Picker("Paper", selection: $model.paperChoice) {
-                    Text("Auto size").tag("auto")
-                    Divider()
-                    ForEach(AppModel.fixedPapers, id: \.key) { paper in
-                        Text(paper.label).tag(paper.key)
-                    }
-                }
-
-                // Only meaningful alongside a forced size — auto-detect
-                // derives orientation from the page it found.
-                Picker("Orientation", selection: $model.paperLandscape) {
-                    Text("Portrait").tag(false)
-                    Text("Landscape").tag(true)
-                }
-                .disabled(model.fixedPaperMM == nil)
+                ScanSettingsItems(model: model)
             } label: {
-                Image(systemName: "ellipsis")
+                // A label, not a bare image: .help is only the hint, and
+                // VoiceOver would read the symbol's name
+                // (/documentation/swiftui/view/help(_:)-9lm7l).
+                Label("Scan Settings", systemImage: "ellipsis")
+                    .labelStyle(.iconOnly)
             }
             // .button keeps the capsule the bare ellipsis would otherwise
             // lose; .hidden drops the disclosure chevron beside it.
@@ -369,6 +361,11 @@ struct PageReorderDelegate: DropDelegate {
         if let dragging = draggingID {
             model.movePage(id: dragging, before: targetID)
         }
+    }
+
+    /// Only a page dragged from this grid; not text from elsewhere.
+    func validateDrop(info _: DropInfo) -> Bool {
+        draggingID != nil
     }
 
     func dropUpdated(info _: DropInfo) -> DropProposal? {
@@ -404,6 +401,7 @@ struct PageCell: View {
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: 160, maxHeight: 200)
+                .accessibilityLabel("Page \(number)")
                 .background(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(
@@ -421,6 +419,7 @@ struct PageCell: View {
                     .buttonStyle(.plain)
                     .padding(6)
                     .help("Remove this page")
+                    .accessibilityLabel("Remove page \(number)")
                     .hoverHighlight(scale: 1.15)
                 }
             }
@@ -433,5 +432,44 @@ struct PageCell: View {
         .contextMenu {
             Button("Remove Page", role: .destructive, action: onDelete)
         }
+    }
+}
+
+// MARK: - Scan settings
+
+/// Mode, resolution, paper and orientation: the toolbar's settings menu and
+/// the Scanner menu show the same items.
+struct ScanSettingsItems: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        Picker("Mode", selection: $model.photoMode) {
+            Label("Document", systemImage: "doc.text").tag(false)
+            Label("Photo", systemImage: "photo").tag(true)
+        }
+
+        Divider()
+
+        Picker("Resolution", selection: $model.dpi) {
+            ForEach(model.availableDPIs, id: \.self) { d in
+                Text("\(d) dpi").tag(d)
+            }
+        }
+
+        Picker("Paper", selection: $model.paperChoice) {
+            Text("Auto size").tag("auto")
+            Divider()
+            ForEach(AppModel.fixedPapers, id: \.key) { paper in
+                Text(paper.label).tag(paper.key)
+            }
+        }
+
+        // Only meaningful alongside a forced size — auto-detect
+        // derives orientation from the page it found.
+        Picker("Orientation", selection: $model.paperLandscape) {
+            Text("Portrait").tag(false)
+            Text("Landscape").tag(true)
+        }
+        .disabled(model.fixedPaperMM == nil)
     }
 }

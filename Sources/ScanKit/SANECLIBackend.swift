@@ -112,8 +112,15 @@ public final class SANECLIBackend: ScannerBackend {
         // Not mid-pass (still resolving the device, or between retries):
         // the flag stops the scan before it starts, and nothing is wedged.
         guard let p, p.isRunning else { return true }
+        // The reset opens the device for exclusive access, which fails while
+        // scanimage still holds it (/documentation/iousbhost/iousbhostobject/
+        // initwithioservice:options:queue:error:interesthandler:),
+        // and SIGTERM may be ignored (/documentation/foundation/process/terminate()).
         p.terminate()
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        if await !exits(p, within: 3) {
+            kill(p.processIdentifier, SIGKILL)
+            _ = await exits(p, within: 1)
+        }
         let tokens = ScannerInfo(id: "", name: scannerName).baseName
             .split(separator: " ").map(String.init)
         let reset = USBReset.resetDevice(nameTokens: tokens)
@@ -122,6 +129,16 @@ public final class SANECLIBackend: ScannerBackend {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
         return reset
+    }
+
+    /// Polls until the process has exited, up to `seconds`.
+    private func exits(_ p: Process, within seconds: Double) async -> Bool {
+        var waited = 0.0
+        while p.isRunning, waited < seconds {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            waited += 0.1
+        }
+        return !p.isRunning
     }
 
     public func scan(
@@ -249,10 +266,15 @@ public final class SANECLIBackend: ScannerBackend {
                 if proc.terminationStatus == 0 {
                     cont.resume(returning: stdout.text)
                 } else {
+                    // A signal's number is reported as the status too.
+                    let ended =
+                        proc.terminationReason == .uncaughtSignal
+                        ? "was stopped by signal" : "exited with status"
                     let message = stderr.text
                     cont.resume(
                         throwing: ScanError.scanFailed(
-                            message.isEmpty ? "scanimage exit \(proc.terminationStatus)" : message
+                            message.isEmpty
+                                ? "\(exe.lastPathComponent) \(ended) \(proc.terminationStatus)" : message
                         )
                     )
                 }
@@ -278,7 +300,7 @@ private final class PipeDrain: @unchecked Sendable {
 
     init(_ pipe: Pipe) {
         DispatchQueue.global().async(group: done) { [self] in
-            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
             // Close now: the timeout closure keeps the Process (and so the
             // Pipe) alive for up to 20 minutes after a scan.
             try? pipe.fileHandleForReading.close()

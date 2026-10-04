@@ -10,7 +10,7 @@ archival PDFs — one big button, ~20 KB per page.**
 [![CI](https://img.shields.io/github/actions/workflow/status/bensquire/PaperDrop/ci.yml?branch=main&label=ci&logo=github&cacheSeconds=300)](https://github.com/bensquire/PaperDrop/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/actions/workflow/status/bensquire/PaperDrop/release.yml?label=release&logo=github&cacheSeconds=300)](https://github.com/bensquire/PaperDrop/actions/workflows/release.yml)
 [![Latest](https://img.shields.io/github/v/release/bensquire/PaperDrop?include_prereleases&label=latest&logo=apple&cacheSeconds=300)](https://github.com/bensquire/PaperDrop/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-007aff?logo=apple)](https://www.apple.com/macos/)
+[![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-007aff?logo=apple)](https://www.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/swift-5.9-f05138?logo=swift)](https://swift.org)
 [![License](https://img.shields.io/github/license/bensquire/PaperDrop?label=license&cacheSeconds=300)](LICENSE)
 
@@ -65,7 +65,7 @@ silent. Nothing else to install, even for ancient USB scanners.
 
 ## Build from source
 
-Xcode plus — for the bundled scanner stack — a one-time
+Xcode 26 (the macOS 26 SDK) plus — for the bundled scanner stack — a one-time
 `brew install sane-backends` (its binaries get vendored and relocated
 into the app by `scripts/vendor-sane.sh`). No third-party Swift
 dependencies.

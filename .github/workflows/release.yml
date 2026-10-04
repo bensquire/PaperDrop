@@ -26,7 +26,7 @@ permissions:
 jobs:
   release:
     name: Build, sign, notarize, publish
-    runs-on: macos-15
+    runs-on: macos-26  # tests built for macOS 26 only run on 26
     # macOS minutes bill at 10x. A release takes ~2.5 min (July-Aug 2026),
     # half of it two notarizations; each wait is capped at 15 min below, so
     # 35 min covers both at Apple's 98th percentile and nothing longer.

@@ -106,16 +106,25 @@ public enum PDFWriter {
                     let boxW = word.box.width * ptW
                     let size = max(4, word.box.height * ptH)
                     // Horizontal scale so the string spans the detected box
-                    // (measured unescaped: "\243" is one glyph).
-                    let nominal = Double(word.text.count) * size * 0.5
+                    // (measured unescaped, "\243" being one glyph, and
+                    // without a word's trailing space, which is past its box).
+                    let glyphs = word.text.trimmingCharacters(in: .whitespaces).count
+                    let nominal = Double(glyphs) * size * 0.5
                     let tz = nominal > 0 ? boxW / nominal * 100 : 100
                     content += "\n/F1 \(fmt(size)) Tf \(fmt(min(500, max(20, tz)))) Tz"
                     content += " 1 0 0 1 \(fmt(x)) \(fmt(y)) Tm (\(text)) Tj"
                 }
                 content += "\nET"
             }
-            var cobj = Data("<</Length \(content.utf8.count)>>\nstream\n".utf8)
-            cobj.append(Data(content.utf8))
+            // A bare image placement is ~40 bytes; the OCR layer is the bulk
+            // of a page's text, and compresses.
+            let raw = Data(content.utf8)
+            let body = page.ocrWords.isEmpty ? nil : flate(raw)
+            var cobj = Data(
+                "<</Length \((body ?? raw).count)\(body == nil ? "" : "/Filter/FlateDecode")>>\nstream\n"
+                    .utf8
+            )
+            cobj.append(body ?? raw)
             cobj.append(Data("\nendstream".utf8))
             objects.append(cobj)
 
@@ -159,6 +168,23 @@ public enum PDFWriter {
                 """.utf8
             )
         )
+        return out
+    }
+
+    /// zlib-wrapped DEFLATE, which FlateDecode reads. Foundation's `.zlib`
+    /// is the raw RFC 1951 stream (/documentation/compression/compression_zlib),
+    /// so the RFC 1950 header and Adler-32 trailer are added here.
+    static func flate(_ data: Data) -> Data? {
+        guard let deflated = try? (data as NSData).compressed(using: .zlib) else { return nil }
+        var a: UInt32 = 1, b: UInt32 = 0
+        for byte in data {
+            a = (a + UInt32(byte)) % 65521
+            b = (b + a) % 65521
+        }
+        let adler = b << 16 | a
+        var out = Data([0x78, 0x9C])
+        out.append(deflated as Data)
+        out.append(contentsOf: [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: adler >> $0) })
         return out
     }
 

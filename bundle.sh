@@ -29,6 +29,15 @@ cp Vendor/sane/lib/sane/*.so $APP/Contents/Frameworks/sane/
 cp -R Vendor/sane/etc/sane.d $APP/Contents/Resources/
 cp -R Vendor/sane/licenses $APP/Contents/Resources/
 cp Vendor/sane/VERSION $APP/Contents/Resources/licenses/SANE-VERSION
+# The About panel shows Credits.html from the main bundle
+# (/documentation/appkit/nsapplication/aboutpaneloptionkey/credits).
+cat > $APP/Contents/Resources/Credits.html <<EOF
+<p style="font: 11px -apple-system; text-align: center">
+Includes SANE ($(cat Vendor/sane/VERSION)), GPL v2 with a linking exception,
+run as a separate process. Licences are in the app's Resources/licenses;
+source at <a href="https://gitlab.com/sane-project/backends">gitlab.com/sane-project/backends</a>.
+</p>
+EOF
 cat > $APP/Contents/Info.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -41,7 +50,12 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
-  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 Ben Squire. MIT License.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>PaperDrop saves your scanned PDFs to the Scans folder in Documents.</string>
+  <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 EOF

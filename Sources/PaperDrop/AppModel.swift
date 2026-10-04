@@ -10,58 +10,63 @@ struct PageItem: Identifiable {
     let build: (_ ocr: Bool) throws -> PDFWriter.Page
 }
 
+// /documentation/swiftui/migrating-from-the-observable-object-protocol-to-the-observable-macro
 @MainActor
-final class AppModel: ObservableObject {
-    @Published var scanners: [ScannerInfo] = []
-    @Published var selectedScannerID: String?
-    @Published var discovering = false
+@Observable
+final class AppModel {
+    var scanners: [ScannerInfo] = []
+    var selectedScannerID: String?
+    var discovering = false
 
-    @Published var pages: [PageItem] = []
-    @Published var scanning = false
-    @Published var saving = false
-    @Published var statusText = ""
-    @Published var errorText: String?
-    @Published var docName = ""
+    var pages: [PageItem] = []
+    var scanning = false
+    var saving = false
+    var statusText = ""
+    var errorText: String?
+    var docName = ""
 
-    private static let dpiKey = "dpi"
-    private static let dpiFallback = 300
+    // Settings persist in UserDefaults under the keys @AppStorage used:
+    // each is read once at launch and written back on change. (@AppStorage
+    // itself only works in views.)
+    private static let defaults = UserDefaults.standard
+
+    private static func saved<T>(_ key: String, or fallback: T) -> T {
+        defaults.object(forKey: key) as? T ?? fallback
+    }
 
     /// Persistent default (Settings); the toolbar picker edits the
     /// session-only `dpi` below so a one-off override doesn't stick.
-    @AppStorage(AppModel.dpiKey) var defaultDpi = AppModel.dpiFallback {
-        willSet { objectWillChange.send() }
+    var defaultDpi = saved("dpi", or: 300) {
+        didSet { Self.defaults.set(defaultDpi, forKey: "dpi") }
     }
-    @Published var dpi: Int
+    var dpi = saved("dpi", or: 300)
+
+    var photoMode = saved("photoMode", or: false) {
+        didSet { Self.defaults.set(photoMode, forKey: "photoMode") }
+    }
+    var ocrEnabled = saved("ocr", or: true) {
+        didSet { Self.defaults.set(ocrEnabled, forKey: "ocr") }
+    }
+    var paperSnap = saved("paperSnap", or: true) {
+        didSet { Self.defaults.set(paperSnap, forKey: "paperSnap") }
+    }
+    var uniformPages = saved("uniformPages", or: true) {
+        didSet { Self.defaults.set(uniformPages, forKey: "uniformPages") }
+    }
+    var paperChoice = saved("paperChoice", or: "auto") {
+        didSet { Self.defaults.set(paperChoice, forKey: "paperChoice") }
+    }
+    var paperLandscape = saved("paperLandscape", or: false) {
+        didSet { Self.defaults.set(paperLandscape, forKey: "paperLandscape") }
+    }
+    var archivePath = saved("archivePath", or: NSHomeDirectory() + "/Documents/Scans") {
+        didSet { Self.defaults.set(archivePath, forKey: "archivePath") }
+    }
 
     init() {
-        dpi =
-            UserDefaults.standard.object(forKey: Self.dpiKey) as? Int
-            ?? Self.dpiFallback
         // Scans orphaned by a crash or a failed page; nothing in here
         // outlives a session.
         try? FileManager.default.removeItem(at: workDir)
-    }
-
-    // @AppStorage doesn't publish from inside an ObservableObject; each
-    // announces its change so dependent views (e.g. Orientation's
-    // disabled state) refresh.
-    @AppStorage("photoMode") var photoMode = false {
-        willSet { objectWillChange.send() }
-    }
-    @AppStorage("ocr") var ocrEnabled = true {
-        willSet { objectWillChange.send() }
-    }
-    @AppStorage("paperSnap") var paperSnap = true {
-        willSet { objectWillChange.send() }
-    }
-    @AppStorage("uniformPages") var uniformPages = true {
-        willSet { objectWillChange.send() }
-    }
-    @AppStorage("paperChoice") var paperChoice = "auto" {
-        willSet { objectWillChange.send() }
-    }
-    @AppStorage("paperLandscape") var paperLandscape = false {
-        willSet { objectWillChange.send() }
     }
 
     /// Toolbar paper choices, derived from Pipeline's tables so paper
@@ -87,12 +92,6 @@ final class AppModel: ObservableObject {
     var fixedPaperMM: (w: Double, h: Double)? {
         Self.fixedPapers.first { $0.key == paperChoice }
             .map { paperLandscape ? ($0.hMM, $0.wMM) : ($0.wMM, $0.hMM) }
-    }
-
-    @AppStorage("archivePath") var archivePath =
-        NSHomeDirectory() + "/Documents/Scans"
-    {
-        willSet { objectWillChange.send() }
     }
 
     let availableDPIs = [150, 200, 300, 400, 600]
@@ -242,7 +241,11 @@ final class AppModel: ObservableObject {
         )
         let tiff = try G4.tiff(from: page)
         let stream = try G4.extractStream(fromTIFF: tiff)
-        let thumb = page.cgImage.map { thumbnail($0) }
+        // ImageIO decodes only what the thumbnail needs: 7 ms against 40 ms
+        // drawing the full 300 dpi page (154 against 22 ms at 600)
+        // (/documentation/imageio/cgimagesourcecreatethumbnailatindex(_:_:_:)).
+        let thumb = ImageEncode.thumbnail(of: tiff, maxPixelSize: 400)
+            .map { NSImage(cgImage: $0, size: .zero) }
         let capturedPage = page
         return PageItem(
             thumbnail: thumb,
@@ -348,8 +351,24 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The window's undo manager, so Remove and Discard can be undone from
+    /// the Edit menu rather than confirmed up front.
+    @ObservationIgnored weak var undoManager: UndoManager?
+
     func deletePage(_ id: UUID) {
-        pages.removeAll { $0.id == id }
+        guard let index = pages.firstIndex(where: { $0.id == id }) else { return }
+        let removed = pages.remove(at: index)
+        registerUndo("Remove Page") { model in
+            model.pages.insert(removed, at: min(index, model.pages.count))
+        }
+    }
+
+    /// Moves a page one place earlier (-1) or later (+1).
+    func movePage(id: UUID, by offset: Int) {
+        guard let from = pages.firstIndex(where: { $0.id == id }),
+            pages.indices.contains(from + offset)
+        else { return }
+        pages.swapAt(from, from + offset)
     }
 
     func movePage(id: UUID, before targetID: UUID) {
@@ -366,9 +385,21 @@ final class AppModel: ObservableObject {
     }
 
     func discardAll() {
+        let (discarded, name) = (pages, docName)
         pages = []
         docName = ""
         statusText = ""
         errorText = nil
+        registerUndo("Discard Pages") { model in
+            model.pages = discarded
+            model.docName = name
+        }
+    }
+
+    private func registerUndo(_ action: String, _ restore: @escaping @MainActor (AppModel) -> Void) {
+        undoManager?.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated { restore(model) }
+        }
+        undoManager?.setActionName(action)
     }
 }

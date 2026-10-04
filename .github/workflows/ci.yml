@@ -21,7 +21,7 @@ concurrency:
 jobs:
   ci:
     name: Lint, test, smoke build
-    runs-on: macos-15
+    runs-on: macos-26  # tests built for macOS 26 only run on 26
     # macOS minutes bill at 10x. Runs take 1.3-2.1 min (July-Aug 2026), so
     # 10 min is ~5x the slowest: room for a cold Homebrew cache, not for a hang.
     timeout-minutes: 10

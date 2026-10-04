@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import ImageCaptureCore
+import UniformTypeIdentifiers
 
 /// ImageCaptureCore backend — drives any scanner macOS supports
 /// (local ICA/TWAIN devices and AirScan/eSCL network scanners).
@@ -31,13 +32,12 @@ public final class ICCBackend: ScannerBackend {
     public func capabilities(of scanner: ScannerInfo) async throws -> ScannerCapabilities {
         try await withSession(for: scanner) { session in
             let unit = try await session.selectFlatbed()
-            let res = unit.supportedResolutions.sorted()
-            let size = unit.physicalSize  // in current measurement unit
-            let mm =
-                unit.measurementUnit == .inches
-                ? CGSize(width: size.width * 25.4, height: size.height * 25.4)
-                : CGSize(width: size.width * 10, height: size.height * 10)
-            return ScannerCapabilities(resolutions: res, bedSizeMM: mm)
+            try ScanSession.useInches(unit)
+            let inches = unit.physicalSize
+            return ScannerCapabilities(
+                resolutions: unit.supportedResolutions.sorted(),
+                bedSizeMM: CGSize(width: inches.width * 25.4, height: inches.height * 25.4)
+            )
         }
     }
 
@@ -68,12 +68,16 @@ public final class ICCBackend: ScannerBackend {
         _ body: (ScanSession) async throws -> T
     ) async throws -> T {
         stateLock.withLock { cancelRequested = false }
-        let devices = await browser.browse(for: 8)
-        guard
-            let device = devices.first(where: {
-                ($0.persistentIDString ?? $0.name) == scanner.id || $0.name == scanner.name
-            })
-        else { throw ScanError.noDevice }
+        // Stopping the browser frees every device not in use
+        // (/documentation/imagecapturecore/icdevicebrowser/stop()), the one
+        // about to be opened included; keep it running until we are done.
+        browser.hold()
+        defer { browser.release() }
+        @Sendable func isWanted(_ device: ICScannerDevice) -> Bool {
+            (device.persistentIDString ?? device.name) == scanner.id || device.name == scanner.name
+        }
+        let devices = await browser.browse(for: 8) { $0.contains(where: isWanted) }
+        guard let device = devices.first(where: isWanted) else { throw ScanError.noDevice }
         let session = ScanSession(device: device)
         let cancelled = stateLock.withLock { () -> Bool in
             activeSession = session
@@ -93,14 +97,36 @@ public final class ICCBackend: ScannerBackend {
 
 // MARK: - Device browsing
 
+/// Runs `body` on the main thread: ImageCaptureCore drives its browser and
+/// delegates there.
+private func onMain(_ body: @escaping @Sendable () -> Void) {
+    if Thread.isMainThread {
+        body()
+    } else {
+        DispatchQueue.main.async(execute: body)
+    }
+}
+
+/// All state is confined to the main thread, so it needs no lock.
 private final class DeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecked Sendable {
+    private struct Waiter {
+        let cont: CheckedContinuation<[ICScannerDevice], Never>
+        /// Answers the browse early; nil waits for network devices too.
+        let isDone: (@Sendable ([ICScannerDevice]) -> Bool)?
+    }
+
+    /// Network scanners arrive after local ones and have no "all found"
+    /// signal of their own, so an untargeted browse waits this long after
+    /// local enumeration ends. A guess: no network scanner was at hand to
+    /// measure.
+    private static let networkGrace: TimeInterval = 2
+
     private let browser = ICDeviceBrowser()
-    private var found: [ICScannerDevice] = []
-    private var waiting: [CheckedContinuation<[ICScannerDevice], Never>] = []
-    /// Identifies the browse in flight, so a finished browse's timeout
-    /// cannot cut short the next one.
-    private var generation = 0
-    private let lock = NSLock()
+    private var waiters: [Int: Waiter] = [:]
+    private var nextWaiter = 0
+    /// Sessions keeping the browser running between browses.
+    private var holds = 0
+    private var localDevicesEnumerated = false
 
     /// The browser outlives every browse, so its delegate and device mask
     /// are one-time setup rather than per-call configuration.
@@ -115,59 +141,93 @@ private final class DeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecked
         )!
     }
 
-    /// A caller arriving while a browse is in flight joins it rather than
-    /// restarting the shared browser — cancelling the running one would
-    /// hand its caller an empty device list. The first caller's timeout
-    /// governs; a browse is short and both callers want the same answer.
-    func browse(for timeout: TimeInterval) async -> [ICScannerDevice] {
+    /// The scanners found within `timeout`. Answers sooner once `isDone`
+    /// holds of them or, without one, `networkGrace` after the local devices
+    /// are enumerated. `moreComing` is no end signal: it closes one batch,
+    /// and network devices come in later ones.
+    func browse(
+        for timeout: TimeInterval,
+        until isDone: (@Sendable ([ICScannerDevice]) -> Bool)? = nil
+    ) async -> [ICScannerDevice] {
         await withCheckedContinuation { cont in
-            let browse = lock.withLock { () -> Int? in
-                waiting.append(cont)
-                guard waiting.count == 1 else { return nil }
-                found.removeAll()
-                generation += 1
-                return generation
-            }
-            guard let browse else { return }
-            // ImageCaptureCore delivers to the main run loop; drive the
-            // browser from there too.
-            DispatchQueue.main.async { [self] in
-                browser.start()
-                DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
-                    self?.finish(browse: browse)
+            onMain { [self] in
+                let id = nextWaiter
+                nextWaiter += 1
+                waiters[id] = Waiter(cont: cont, isDone: isDone)
+                startIfNeeded()
+                after(timeout) { $0.answer(id) }
+                if isDone == nil, localDevicesEnumerated {
+                    after(Self.networkGrace) { $0.answer(id) }
                 }
+                answerSatisfiedWaiters()
             }
         }
     }
 
-    /// Both the early-stop and the timeout path call this; whichever claims
-    /// the waiters stops the browser and answers them all. A timeout passes
-    /// its browse, and is ignored once a later browse has begun. Clearing
-    /// `found` here releases the ImageCaptureCore devices rather than
-    /// holding them until the next browse.
-    private func finish(browse: Int? = nil) {
-        let (waiters, devices) = lock.withLock {
-            () -> ([CheckedContinuation<[ICScannerDevice], Never>], [ICScannerDevice]) in
-            guard browse == nil || browse == generation else { return ([], []) }
-            defer {
-                waiting.removeAll()
-                found.removeAll()
-            }
-            return (waiting, found)
-        }
-        guard !waiters.isEmpty else { return }
-        browser.stop()
-        for cont in waiters {
-            cont.resume(returning: devices)
+    /// Keeps the browser running until the matching `release()`.
+    func hold() {
+        onMain { [self] in
+            holds += 1
+            startIfNeeded()
         }
     }
 
-    func deviceBrowser(_: ICDeviceBrowser, didAdd device: ICDevice, moreComing: Bool) {
-        if let scanner = device as? ICScannerDevice {
-            lock.withLock { found.append(scanner) }
-            // Local scanners arrive fast; stop early when the browser says so.
-            if !moreComing {
-                finish()
+    func release() {
+        onMain { [self] in
+            holds -= 1
+            stopIfIdle()
+        }
+    }
+
+    private var scanners: [ICScannerDevice] {
+        browser.devices?.compactMap { $0 as? ICScannerDevice } ?? []
+    }
+
+    private func startIfNeeded() {
+        guard !browser.isBrowsing else { return }
+        localDevicesEnumerated = false
+        browser.start()
+    }
+
+    /// Stopping frees the devices not in use, so it waits until nothing is
+    /// browsing or holding.
+    private func stopIfIdle() {
+        if waiters.isEmpty, holds == 0, browser.isBrowsing {
+            browser.stop()
+        }
+    }
+
+    private func answer(_ id: Int) {
+        guard let waiter = waiters.removeValue(forKey: id) else { return }
+        waiter.cont.resume(returning: scanners)
+        stopIfIdle()
+    }
+
+    private func answerSatisfiedWaiters() {
+        let found = scanners
+        for (id, waiter) in waiters where waiter.isDone?(found) == true {
+            answer(id)
+        }
+    }
+
+    private func after(_ delay: TimeInterval, _ body: @escaping @Sendable (DeviceBrowser) -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self.map(body)
+        }
+    }
+
+    // MARK: ICDeviceBrowserDelegate
+
+    func deviceBrowser(_: ICDeviceBrowser, didAdd _: ICDevice, moreComing _: Bool) {
+        onMain { self.answerSatisfiedWaiters() }
+    }
+
+    // /documentation/imagecapturecore/icdevicebrowserdelegate/devicebrowserdidenumeratelocaldevices(_:)
+    func deviceBrowserDidEnumerateLocalDevices(_: ICDeviceBrowser) {
+        onMain { [self] in
+            localDevicesEnumerated = true
+            for (id, waiter) in waiters where waiter.isDone == nil {
+                after(Self.networkGrace) { $0.answer(id) }
             }
         }
     }
@@ -206,13 +266,43 @@ private final class ScanSession: NSObject, ICScannerDeviceDelegate, @unchecked S
         }
     }
 
+    /// ImageCaptureCore holds its delegate unowned(unsafe)
+    /// (/documentation/imagecapturecore/icdevice/delegate) and calls it
+    /// after a close is requested, so the completion keeps this session
+    /// alive until the close is done, then detaches it on the main thread,
+    /// where the callbacks arrive.
     func close() {
-        device.requestCloseSession()
+        guard device.hasOpenSession else {
+            onMain { self.device.delegate = nil }
+            return
+        }
+        device.requestCloseSession(options: nil) { _ in
+            onMain { self.device.delegate = nil }
+        }
     }
 
     func selectFlatbed() async throws -> ICScannerFunctionalUnit {
-        try await request(\.selectCont, timeout: 60, what: "Selecting the flatbed") {
+        // /documentation/imagecapturecore/icscannerdevice/availablefunctionalunittypes
+        guard
+            device.availableFunctionalUnitTypes.contains(where: {
+                $0.uintValue == ICScannerFunctionalUnitType.flatbed.rawValue
+            })
+        else { throw ScanError.sessionFailed("This scanner has no flatbed") }
+        if device.selectedFunctionalUnit.type == .flatbed {
+            return device.selectedFunctionalUnit
+        }
+        return try await request(\.selectCont, timeout: 60, what: "Selecting the flatbed") {
             self.device.requestSelect(.flatbed)
+        }
+    }
+
+    /// Sets the unit to inches, the unit `physicalSize` and `scanArea` are
+    /// then in. The unit "will always be one of the supported" ones, so a
+    /// device without inches keeps its own; refuse rather than mis-measure.
+    static func useInches(_ unit: ICScannerFunctionalUnit) throws {
+        unit.measurementUnit = .inches
+        guard unit.measurementUnit == .inches else {
+            throw ScanError.sessionFailed("The scanner does not measure in inches")
         }
     }
 
@@ -229,7 +319,7 @@ private final class ScanSession: NSObject, ICScannerDeviceDelegate, @unchecked S
             case .color: .RGB
             }
         unit.bitDepth = config.mode == .blackAndWhite ? .depth1Bit : .depth8Bits
-        unit.measurementUnit = .inches
+        try Self.useInches(unit)
         let bed = unit.physicalSize
         if let mm = config.areaMM {
             unit.scanArea = CGRect(
@@ -243,7 +333,7 @@ private final class ScanSession: NSObject, ICScannerDeviceDelegate, @unchecked S
         device.transferMode = .fileBased
         device.downloadsDirectory = directory
         device.documentName = "scan-\(Int(Date().timeIntervalSince1970))"
-        device.documentUTI = "public.tiff"
+        device.documentUTI = UTType.tiff.identifier
 
         // As generous as SANE's: slow devices at high dpi take minutes.
         // Weak: the timer outlives the scan by up to 20 minutes.
@@ -327,13 +417,20 @@ private final class ScanSession: NSObject, ICScannerDeviceDelegate, @unchecked S
         failAll(ScanError.scanFailed("Scanner disconnected"))
     }
 
+    // Without this a device error left the request to its timeout.
+    func device(_: ICDevice, didEncounterError error: Error?) {
+        failAll(ScanError.scanFailed(error?.localizedDescription ?? "The scanner reported an error"))
+    }
+
     // MARK: ICScannerDeviceDelegate
 
     func scannerDevice(
         _: ICScannerDevice,
         didSelect unit: ICScannerFunctionalUnit, error: Error?
     ) {
-        guard let cont = take(\.selectCont) else { return }
+        // Also sent for the device's default unit just after the session
+        // opens; only the flatbed (or a failure) answers the request.
+        guard error != nil || unit.type == .flatbed, let cont = take(\.selectCont) else { return }
         if let error {
             cont.resume(throwing: ScanError.sessionFailed(error.localizedDescription))
         } else {
