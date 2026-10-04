@@ -10,11 +10,21 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A newer push to the same branch or PR supersedes the run in progress;
+# finishing the old one only spends macOS minutes (billed at 10x).
+# release.yml has no equivalent: a cancelled release could stop between
+# notarizing and publishing.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     name: Lint, test, smoke build
     runs-on: macos-15
-    timeout-minutes: 25
+    # macOS minutes bill at 10x. Runs take 1.3-2.1 min (July-Aug 2026), so
+    # 10 min is ~5x the slowest: room for a cold Homebrew cache, not for a hang.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +39,7 @@ jobs:
           key: brew-sane-${{ runner.os }}
 
       - name: Install SANE (vendored into the bundle)
+        timeout-minutes: 5  # network-bound; 5-9 s with a warm cache
         run: brew install sane-backends
 
       - name: Lint
