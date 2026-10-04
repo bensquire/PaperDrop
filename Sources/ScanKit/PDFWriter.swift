@@ -105,8 +105,9 @@ public enum PDFWriter {
                     let y = oy + word.box.minY * ptH
                     let boxW = word.box.width * ptW
                     let size = max(4, word.box.height * ptH)
-                    // Horizontal scale so the string spans the detected box.
-                    let nominal = Double(text.count) * size * 0.5
+                    // Horizontal scale so the string spans the detected box
+                    // (measured unescaped: "\243" is one glyph).
+                    let nominal = Double(word.text.count) * size * 0.5
                     let tz = nominal > 0 ? boxW / nominal * 100 : 100
                     content += "\n/F1 \(fmt(size)) Tf \(fmt(min(500, max(20, tz)))) Tz"
                     content += " 1 0 0 1 \(fmt(x)) \(fmt(y)) Tm (\(text)) Tj"
@@ -134,7 +135,9 @@ public enum PDFWriter {
         objects[0] = Data("<</Type/Catalog/Pages 2 0 R>>".utf8)
         let kids = pageObjectIDs.map { "\($0) 0 R" }.joined(separator: " ")
         objects[1] = Data("<</Type/Pages/Kids[\(kids)]/Count \(pageObjectIDs.count)>>".utf8)
-        objects[2] = Data("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>".utf8)
+        objects[2] = Data(
+            "<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>".utf8
+        )
 
         var out = Data("%PDF-1.4\n%\u{00E2}\u{00E3}\u{00CF}\u{00D3}\n".utf8)
         var offsets: [Int] = []
@@ -163,6 +166,9 @@ public enum PDFWriter {
         String(format: "%.2f", d)
     }
 
+    /// A PDF string literal body in the font's WinAnsi encoding: Latin-1
+    /// plus £, €, curly quotes and dashes survive (as octal escapes), so
+    /// they stay searchable.
     private static func pdfEscape(_ s: String) -> String {
         var out = ""
         for ch in s.unicodeScalars {
@@ -171,7 +177,12 @@ public enum PDFWriter {
             case ")": out += "\\)"
             case "\\": out += "\\\\"
             case let c where c.isASCII && c.value >= 32: out.unicodeScalars.append(c)
-            default: out += " "  // non-Latin fallback; searchability over fidelity
+            default:
+                if let byte = String(ch).data(using: .windowsCP1252)?.first, byte >= 0x80 {
+                    out += String(format: "\\%03o", byte)
+                } else {
+                    out += " "  // outside WinAnsi; searchability over fidelity
+                }
             }
         }
         return out

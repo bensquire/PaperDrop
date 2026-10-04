@@ -55,7 +55,7 @@ on purpose.
 - **Batteries included** — the full SANE stack (all 85 backends) ships
   inside the app, so legacy USB scanners work straight from the DMG
   with zero installs. The app itself is pure Swift on system frameworks;
-  ~17 MB all-in.
+  ~22 MB all-in.
 
 ## Install
 
@@ -99,6 +99,7 @@ Sources/ScanKit/           # The engine — reusable, UI-free
 ├── G4.swift               #   CCITT G4 via ImageIO + TIFF stream extraction
 ├── PDFWriter.swift        #   minimal PDF writer (G4 + JPEG + OCR layer)
 ├── OCR.swift              #   Vision text recognition
+├── Archive.swift          #   safe, never-overwriting PDF file names
 ├── ICCBackend.swift       #   ImageCaptureCore scanner backend
 ├── SANECLIBackend.swift   #   SANE backend + scanner-reliability lore
 └── USBReset.swift         #   software unplug/replug via IOUSBHost
@@ -116,7 +117,7 @@ scripts/                   # vendor-sane.sh, make-dmg.sh
    backend.
 2. **Otsu threshold** to 1-bit, then connected-component cleanup: ink
    touching the scan border is bed-edge shadow (removed), specks under
-   4 px are dust (removed).
+   4 px at 300 dpi (scaled with resolution) are dust (removed).
 3. **Content-cluster crop** — ink is dilated so paragraphs merge into
    blobs; every blob with meaningful ink survives (a lone signature box
    far below a table is content, a fleck isn't). Outlier tails holding

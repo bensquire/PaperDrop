@@ -30,7 +30,7 @@ private func mm(_ px: Int) -> Double {
 
 private func cleanedBinary(_ gray: Pipeline.GrayImage) -> Pipeline.BinaryImage {
     var bw = Pipeline.threshold(gray, at: 128)
-    Pipeline.cleanComponents(&bw)
+    Pipeline.cleanComponents(&bw, dpi: dpi)
     return bw
 }
 
@@ -61,7 +61,7 @@ final class CleanComponentsTests: XCTestCase {
         var bw = Pipeline.threshold(gray, at: Pipeline.otsuThreshold(gray))
 
         // Act
-        Pipeline.cleanComponents(&bw)
+        Pipeline.cleanComponents(&bw, dpi: dpi)
 
         // Assert
         let borderY = Int(5 / 25.4 * Double(dpi))
@@ -84,11 +84,56 @@ final class CleanComponentsTests: XCTestCase {
         var bw = Pipeline.BinaryImage(width: w, height: h, ink: ink)
 
         // Act
-        Pipeline.cleanComponents(&bw)
+        Pipeline.cleanComponents(&bw, dpi: 300)
 
         // Assert
         XCTAssertFalse(bw[50, 50], "1px speck should be removed")
         XCTAssertTrue(bw[75, 75], "solid block should survive")
+    }
+}
+
+final class SpeckThresholdTests: XCTestCase {
+    func test_minSpeck_scalesWithResolutionByArea() {
+        // Arrange / Act / Assert — 4 px at 300 dpi, by area, at least 2
+        XCTAssertEqual(Pipeline.minSpeck(dpi: 150), 2)
+        XCTAssertEqual(Pipeline.minSpeck(dpi: 300), 4)
+        XCTAssertEqual(Pipeline.minSpeck(dpi: 600), 16)
+    }
+
+    func test_cleanComponents_keepsAFullStopAt150dpi() {
+        // Arrange — a 2x2 dot (a full stop at 150 dpi) and a lone pixel
+        var ink = [Bool](repeating: false, count: 20 * 20)
+        for (x, y) in [(5, 5), (6, 5), (5, 6), (6, 6), (14, 14)] {
+            ink[y * 20 + x] = true
+        }
+        var bw = Pipeline.BinaryImage(width: 20, height: 20, ink: ink)
+
+        // Act
+        Pipeline.cleanComponents(&bw, dpi: 150)
+
+        // Assert
+        XCTAssertTrue(bw[5, 5], "the dot should survive")
+        XCTAssertFalse(bw[14, 14], "lone noise should be removed")
+    }
+}
+
+final class ResolutionTests: XCTestCase {
+    func test_resolution_readsTheDpiTheFileRecords() throws {
+        // Arrange — a 150 dpi TIFF, as SANE delivers for a 200 dpi request
+        let tiff = try G4.tiff(
+            from: Pipeline.ProcessedPage(
+                width: 8, height: 8, dpi: 150,
+                originX: 0, originY: 0, packed: Data(repeating: 0xFF, count: 8)))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".tiff")
+        try tiff.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Act
+        let dpi = Pipeline.resolution(of: url)
+
+        // Assert
+        XCTAssertEqual(dpi, 150)
     }
 }
 
@@ -125,6 +170,41 @@ final class ContentCropTests: XCTestCase {
         // Assert — metric A4 must win over Letter
         let c = try XCTUnwrap(crop)
         XCTAssertEqual(mm(c.y1 - c.y0), 297, accuracy: 3)
+    }
+
+    func test_contentCrop_prefersA4OverLetterForShortContent() throws {
+        // Arrange — a short A4 letter: 190x245mm content (+8mm margins)
+        // is within the slack of Letter's height but not of A4's
+        let gray = makeGray(
+            bedW: 216.7, bedH: 300,
+            inkRectsMM: [
+                CGRect(x: 10, y: 10, width: 190, height: 245)
+            ])
+
+        // Act
+        let crop = Pipeline.contentCrop(cleanedBinary(gray), dpi: dpi)
+
+        // Assert — the content fits A4, so A4 wins over Letter
+        let c = try XCTUnwrap(crop)
+        XCTAssertEqual(mm(c.x1 - c.x0), 210, accuracy: 3)
+        XCTAssertEqual(mm(c.y1 - c.y0), 297, accuracy: 3)
+    }
+
+    func test_contentCrop_snapsContentWiderThanA4ToLetter() throws {
+        // Arrange — 198x245mm content (+8mm margins) is wider than A4
+        let gray = makeGray(
+            bedW: 216.7, bedH: 300,
+            inkRectsMM: [
+                CGRect(x: 10, y: 10, width: 198, height: 245)
+            ])
+
+        // Act
+        let crop = Pipeline.contentCrop(cleanedBinary(gray), dpi: dpi)
+
+        // Assert — only Letter holds it
+        let c = try XCTUnwrap(crop)
+        XCTAssertEqual(mm(c.x1 - c.x0), 216, accuracy: 3)
+        XCTAssertEqual(mm(c.y1 - c.y0), 279, accuracy: 3)
     }
 
     func test_contentCrop_fixedSizeRotatesWhenContentCannotFit() throws {

@@ -2,9 +2,8 @@ import CoreGraphics
 import Foundation
 import ImageIO
 
-/// Document processing pipeline — Swift port of engine/scandoc.py:
-/// Otsu threshold → bed-edge removal → despeckle → content-cluster crop →
-/// standard-paper-size snap.
+/// Document processing pipeline: Otsu threshold → bed-edge removal →
+/// despeckle → content-cluster crop → standard-paper-size snap.
 public enum Pipeline {
     // MARK: Grayscale loading
 
@@ -32,6 +31,17 @@ public enum Pipeline {
             ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
         }
         return GrayImage(width: w, height: h, pixels: pixels)
+    }
+
+    /// The resolution recorded in a scan file, or nil when it has none.
+    /// Devices snap a request to what they support (SANE rounds 200 dpi to
+    /// 150 on a LiDE 110), so this — not the request — sizes the page.
+    public static func resolution(of url: URL) -> Int? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+            let dpi = props[kCGImagePropertyDPIWidth] as? Double, dpi >= 50
+        else { return nil }
+        return Int(dpi.rounded())
     }
 
     // MARK: Otsu
@@ -81,54 +91,65 @@ public enum Pipeline {
 
     // MARK: Component cleanup (bed edges + specks)
 
+    /// Dust size in pixels at a resolution: 4 px at 300 dpi, scaled by
+    /// area so a full stop survives at 150 dpi. Never below 2, so lone
+    /// noise pixels always go.
+    public static func minSpeck(dpi: Int) -> Int {
+        let scale = Double(dpi) / 300
+        return max(2, Int((4 * scale * scale).rounded()))
+    }
+
     /// Whiten ink components touching the border (scanner-bed edges/shadows)
-    /// and components smaller than minSpeck pixels (dust).
-    public static func cleanComponents(_ bw: inout BinaryImage, minSpeck: Int = 4) {
+    /// and components under the dust size for `dpi` (see `minSpeck`).
+    ///
+    /// One component at a time: measure it, then erase it by flooding it
+    /// again. A visited bitmap (1 byte/px) stands in for a label image
+    /// (4 bytes/px — ~145 MB at 600 dpi full bed).
+    public static func cleanComponents(_ bw: inout BinaryImage, dpi: Int) {
         let w = bw.width, h = bw.height
-        var labels = [Int32](repeating: 0, count: w * h)
-        var sizes: [Int32] = [0]
-        var touchesBorder = [false]
-        var next: Int32 = 1
+        let dust = minSpeck(dpi: dpi)
+        var visited = [Bool](repeating: false, count: w * h)
         var stack = [Int]()
 
-        for start in 0..<(w * h) where bw.ink[start] && labels[start] == 0 {
-            let label = next
-            next += 1
-            sizes.append(0)
-            touchesBorder.append(false)
-            stack.removeAll(keepingCapacity: true)
-            stack.append(start)
-            labels[start] = label
-            while let idx = stack.popLast() {
-                sizes[Int(label)] += 1
-                let x = idx % w, y = idx / w
-                if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
-                    touchesBorder[Int(label)] = true
-                }
-                // 8-connectivity
-                for dy in -1...1 {
-                    let ny = y + dy
-                    if ny < 0 || ny >= h {
-                        continue
-                    }
-                    for dx in -1...1 where dx != 0 || dy != 0 {
-                        let nx = x + dx
-                        if nx < 0 || nx >= w {
-                            continue
-                        }
-                        let n = ny * w + nx
-                        if bw.ink[n], labels[n] == 0 {
-                            labels[n] = label
-                            stack.append(n)
-                        }
-                    }
+        /// 8-connected neighbours of a pixel.
+        func neighbours(_ idx: Int, _ body: (Int) -> Void) {
+            let x = idx % w, y = idx / w
+            for ny in max(0, y - 1)...min(h - 1, y + 1) {
+                for nx in max(0, x - 1)...min(w - 1, x + 1) where nx != x || ny != y {
+                    body(ny * w + nx)
                 }
             }
         }
-        for i in 0..<(w * h) where bw.ink[i] {
-            let l = Int(labels[i])
-            if touchesBorder[l] || sizes[l] < Int32(minSpeck) {
-                bw.ink[i] = false
+
+        for start in 0..<(w * h) where bw.ink[start] && !visited[start] {
+            var size = 0
+            var touchesBorder = false
+            visited[start] = true
+            stack.append(start)
+            while let idx = stack.popLast() {
+                size += 1
+                let x = idx % w, y = idx / w
+                if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
+                    touchesBorder = true
+                }
+                neighbours(idx) { n in
+                    if bw.ink[n], !visited[n] {
+                        visited[n] = true
+                        stack.append(n)
+                    }
+                }
+            }
+            guard touchesBorder || size < dust else { continue }
+            // Erase: clearing ink marks each pixel as done.
+            bw.ink[start] = false
+            stack.append(start)
+            while let idx = stack.popLast() {
+                neighbours(idx) { n in
+                    if bw.ink[n] {
+                        bw.ink[n] = false
+                        stack.append(n)
+                    }
+                }
             }
         }
     }
@@ -199,21 +220,21 @@ public enum Pipeline {
             stack.append(start)
             labels[start] = label
             var count = 0
+            func visit(_ n: Int) {
+                if blob[n], labels[n] == 0 {
+                    labels[n] = label
+                    stack.append(n)
+                }
+            }
             while let idx = stack.popLast() {
                 if small[idx] {
                     count += 1
                 }
                 let x = idx % sw, y = idx / sw
-                for (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
-                    if nx < 0 || ny < 0 || nx >= sw || ny >= sh {
-                        continue
-                    }
-                    let n = ny * sw + nx
-                    if blob[n], labels[n] == 0 {
-                        labels[n] = label
-                        stack.append(n)
-                    }
-                }
+                if x > 0 { visit(idx - 1) }
+                if x < sw - 1 { visit(idx + 1) }
+                if y > 0 { visit(idx - sw) }
+                if y < sh - 1 { visit(idx + sw) }
             }
             inkCount[Int(label)] = count
         }
@@ -350,19 +371,28 @@ public enum Pipeline {
         let pxPerMM = Double(dpi) / 25.4
         let wMM = Double(c.x1 - c.x0) / pxPerMM
         let hMM = Double(c.y1 - c.y0) / pxPerMM
-        // Declaration order is preference order: metric sizes before Letter,
-        // so an A4 page never snaps to the similar-but-wrong Letter.
-        let candidates = paperSizesMM.flatMap { [($0.w, $0.h), ($0.h, $0.w)] }
-        for (tw, th) in candidates {
-            guard wMM <= tw, tw <= wMM + slackMM,
-                hMM <= th, th <= hMM + slackMM
-            else { continue }
-            return paperCrop(
-                anchorX: c.x0, anchorY: c.y0,
-                wMM: tw, hMM: th, imageW: imageW, imageH: imageH, dpi: dpi
-            )
+        let candidates = paperSizesMM.flatMap { [(w: $0.w, h: $0.h), (w: $0.h, h: $0.w)] }
+        func fits(_ p: (w: Double, h: Double)) -> Bool {
+            wMM <= p.w && hMM <= p.h
         }
-        return nil
+        // The slack decides whether the content is a standard page at all…
+        guard
+            let match = candidates.first(where: {
+                fits($0) && $0.w <= wMM + slackMM && $0.h <= hMM + slackMM
+            })
+        else { return nil }
+        // …declaration order decides which: among sizes it fits that are
+        // interchangeable with the match, the first — metric before Letter,
+        // so a short A4 letter doesn't become Letter just because Letter's
+        // height is nearer.
+        let pick =
+            candidates.first {
+                fits($0) && abs($0.w - match.w) <= slackMM && abs($0.h - match.h) <= slackMM
+            } ?? match
+        return paperCrop(
+            anchorX: c.x0, anchorY: c.y0,
+            wMM: pick.w, hMM: pick.h, imageW: imageW, imageH: imageH, dpi: dpi
+        )
     }
 
     // MARK: Full document pipeline
@@ -394,7 +424,7 @@ public enum Pipeline {
         -> (bw: BinaryImage, crop: Crop)
     {
         var bw = threshold(gray, at: otsuThreshold(gray))
-        cleanComponents(&bw)
+        cleanComponents(&bw, dpi: dpi)
         let crop =
             contentCrop(
                 bw, dpi: dpi, snapSlackMM: snapSlackMM,

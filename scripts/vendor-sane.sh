@@ -5,7 +5,8 @@
 # inside PaperDrop.app.
 #
 #   scripts/vendor-sane.sh            # vendor (requires brew sane-backends)
-#   scripts/vendor-sane.sh --verify   # assert no /opt/homebrew references
+#   scripts/vendor-sane.sh --verify   # assert every library reference
+#                                     # resolves inside the vendored tree
 set -e
 cd "$(dirname "$0")/.."
 
@@ -17,15 +18,32 @@ machos() {
     echo $VENDOR/bin/scanimage $VENDOR/lib/*.dylib $VENDOR/lib/sane/*.so
 }
 
+# Linked libraries of a Mach-O (its own install name included, for dylibs).
+linked() {
+    otool -L "$1" | tail -n +2 | awk '{print $1}'
+}
+
 if [[ "$1" == "--verify" ]]; then
+    # Every rpath in the tree resolves to the dylib directory (see the
+    # relocate calls below), so each @rpath/X must exist as lib/X.
     bad=0
     for f in $(machos); do
-        if otool -L "$f" | tail -n +2 | grep -q "/opt/homebrew"; then
-            echo "UNRELOCATED: $f"
-            bad=1
-        fi
+        for dep in $(linked "$f"); do
+            case $dep in
+                /opt/homebrew/*)
+                    echo "UNRELOCATED: $f -> $dep"
+                    bad=1
+                    ;;
+                @rpath/*)
+                    if [[ ! -e $VENDOR/lib/${dep#@rpath/} ]]; then
+                        echo "MISSING: $f -> $dep"
+                        bad=1
+                    fi
+                    ;;
+            esac
+        done
     done
-    [[ $bad == 0 ]] && echo "vendor tree clean: no /opt/homebrew references"
+    [[ $bad == 0 ]] && echo "vendor tree clean: every library reference resolves"
     exit $bad
 fi
 
@@ -35,22 +53,38 @@ rm -rf $VENDOR
 mkdir -p $VENDOR/bin $VENDOR/lib/sane $VENDOR/etc $VENDOR/licenses
 
 # --- Copy (dereference symlinks; skip backend symlink aliases) ---
+BACKENDS=("$BREW_SANE"/lib/sane/*.so(^@))
 cp "$BREW_SANE/bin/scanimage" $VENDOR/bin/
 cp "$BREW_SANE/lib/libsane.1.dylib" $VENDOR/lib/
-for so in "$BREW_SANE"/lib/sane/*.so; do
-    [[ -L "$so" ]] && continue
-    cp "$so" $VENDOR/lib/sane/
-done
-DEPS=(
-    /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib
-    /opt/homebrew/opt/jpeg-turbo/lib/libjpeg.8.dylib
-    /opt/homebrew/opt/libpng/lib/libpng16.16.dylib
-    /opt/homebrew/opt/libtiff/lib/libtiff.6.dylib
-    /opt/homebrew/opt/zstd/lib/libzstd.1.dylib
-    /opt/homebrew/opt/xz/lib/liblzma.5.dylib
-)
-for dep in $DEPS; do
-    cp "$dep" $VENDOR/lib/
+cp $BACKENDS $VENDOR/lib/sane/
+# Dependencies: the transitive closure of Homebrew dylibs the copied
+# binaries link, read from otool rather than listed by hand — Homebrew
+# renames them on major bumps and adds new ones (libtiff now pulls in
+# webp), and backends bring their own (magicolor needs net-snmp, which
+# needs OpenSSL's libcrypto). Walks the Homebrew originals so an @rpath
+# reference resolves beside the library making it.
+typeset -A have
+have[libsane.1.dylib]=1
+queue=("$BREW_SANE/bin/scanimage" "$BREW_SANE/lib/libsane.1.dylib" $BACKENDS)
+while (( ${#queue} )); do
+    f=${queue[1]}
+    shift queue
+    for dep in $(linked "$f"); do
+        case $dep in
+            /opt/homebrew/*) src=$dep ;;
+            @rpath/*)
+                src=${f:h}/${dep#@rpath/}
+                [[ -e $src ]] || src=/opt/homebrew/lib/${dep#@rpath/}
+                ;;
+            *) continue ;;
+        esac
+        name=${src:t}
+        [[ -n ${have[$name]} ]] && continue
+        [[ -e $src ]] || { echo "cannot resolve $dep (linked by $f)" >&2; exit 1; }
+        have[$name]=1
+        cp "$src" $VENDOR/lib/
+        queue+=("$src")
+    done
 done
 cp -RL /opt/homebrew/etc/sane.d $VENDOR/etc/
 cp "$BREW_SANE"/{COPYING,LICENSE} $VENDOR/licenses/
@@ -67,7 +101,7 @@ relocate() {
     shift
     local -a extra_args=("$@")
     local -a changes=()
-    for dep in $(otool -L "$f" | tail -n +2 | awk '{print $1}' | grep "^/opt/homebrew"); do
+    for dep in $(linked "$f" | grep "^/opt/homebrew"); do
         changes+=(-change "$dep" "@rpath/$(basename "$dep")")
     done
     [[ ${#changes} -eq 0 && ${#extra_args} -eq 0 ]] && return 0

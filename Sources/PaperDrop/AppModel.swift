@@ -28,21 +28,41 @@ final class AppModel: ObservableObject {
 
     /// Persistent default (Settings); the toolbar picker edits the
     /// session-only `dpi` below so a one-off override doesn't stick.
-    @AppStorage(AppModel.dpiKey) var defaultDpi = AppModel.dpiFallback
+    @AppStorage(AppModel.dpiKey) var defaultDpi = AppModel.dpiFallback {
+        willSet { objectWillChange.send() }
+    }
     @Published var dpi: Int
 
     init() {
         dpi =
             UserDefaults.standard.object(forKey: Self.dpiKey) as? Int
             ?? Self.dpiFallback
+        // Scans orphaned by a crash or a failed page; nothing in here
+        // outlives a session.
+        try? FileManager.default.removeItem(at: workDir)
     }
 
-    @AppStorage("photoMode") var photoMode = false
-    @AppStorage("ocr") var ocrEnabled = true
-    @AppStorage("paperSnap") var paperSnap = true
-    @AppStorage("uniformPages") var uniformPages = true
-    @AppStorage("paperChoice") var paperChoice = "auto"
-    @AppStorage("paperLandscape") var paperLandscape = false
+    // @AppStorage doesn't publish from inside an ObservableObject; each
+    // announces its change so dependent views (e.g. Orientation's
+    // disabled state) refresh.
+    @AppStorage("photoMode") var photoMode = false {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("ocr") var ocrEnabled = true {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("paperSnap") var paperSnap = true {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("uniformPages") var uniformPages = true {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("paperChoice") var paperChoice = "auto" {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("paperLandscape") var paperLandscape = false {
+        willSet { objectWillChange.send() }
+    }
 
     /// Toolbar paper choices, derived from Pipeline's tables so paper
     /// dimensions have exactly one home. Keys are stable for the
@@ -71,6 +91,9 @@ final class AppModel: ObservableObject {
 
     @AppStorage("archivePath") var archivePath =
         NSHomeDirectory() + "/Documents/Scans"
+    {
+        willSet { objectWillChange.send() }
+    }
 
     let availableDPIs = [150, 200, 300, 400, 600]
 
@@ -103,22 +126,12 @@ final class AppModel: ObservableObject {
             // grab the USB device, which would break a concurrent SANE probe.
             let saneFound = await saneBackend.discover(timeout: 6)
             let iccFound = await iccBackend.discover(timeout: 6)
-            // The same USB device often appears via both backends with
-            // different name spellings ("Canon LiDE 110" vs "CanoScan
-            // LiDE 110"). Match on normalized model suffix; when a SANE
-            // twin exists, prefer it — ICC cannot open devices whose
-            // vendor driver is dead.
-            let deduped = iccFound.filter { iccDev in
-                !saneFound.contains { ScannerInfo.sameModel($0.name, iccDev.name) }
-            }
-            let twinRemoved = deduped.count != iccFound.count
-            let cleaned = saneFound.map { dev in
-                ScannerInfo(id: dev.id, name: twinRemoved ? dev.baseName : dev.name)
-            }
-            let found = cleaned + deduped
+            let found = ScannerInfo.merge(sane: saneFound, icc: iccFound)
+            let previous = self.selectedScanner
             self.scanners = found
             if self.selectedScanner == nil {
-                self.selectedScannerID = found.first?.id
+                // Keep the same scanner selected when its ID changed.
+                self.selectedScannerID = (previous?.match(in: found) ?? found.first)?.id
             }
             self.discovering = false
         }
@@ -157,13 +170,18 @@ final class AppModel: ObservableObject {
                     with: scanner, config: config,
                     to: workDir
                 )
+                // The device may have snapped the request to a resolution
+                // it supports; the file says what it delivered.
+                let dpi = Pipeline.resolution(of: url) ?? config.dpi
                 let item = try await Self.process(
-                    url: url, dpi: config.dpi,
+                    url: url, dpi: dpi,
                     photo: photoMode, snap: paperSnap,
                     fixed: fixedPaperMM
                 )
                 self.pages.append(item)
-                self.statusText = "Page \(self.pages.count): \(item.sizeLabel), \(item.mmSize)"
+                self.statusText =
+                    "Page \(self.pages.count): \(item.sizeLabel), \(item.mmSize)"
+                    + (dpi == config.dpi ? "" : " (scanned at \(dpi) dpi)")
             } catch {
                 if case ScanError.cancelled = error {
                     self.statusText = "Scan cancelled"
@@ -183,8 +201,8 @@ final class AppModel: ObservableObject {
     )
         async throws -> PageItem
     {
+        defer { try? FileManager.default.removeItem(at: url) }
         let gray = try Pipeline.loadGray(url)
-        try? FileManager.default.removeItem(at: url)
 
         if photo {
             let crop = Pipeline.analyze(
@@ -276,21 +294,30 @@ final class AppModel: ObservableObject {
         errorText = nil
         let ocr = ocrEnabled
         statusText = ocr ? "Assembling PDF (OCR)…" : "Assembling PDF…"
-        let name = docName.trimmingCharacters(in: .whitespaces)
-        let fileName =
-            (name.isEmpty
-                ? "Scan " + Date().formatted(date: .abbreviated, time: .shortened)
-                : name) + ".pdf"
+        let title = docName
         let dir = URL(fileURLWithPath: archivePath)
         let builders = pages.map(\.build)
 
         let uniform = uniformPages
         Task.detached { [weak self] in
             do {
-                var pdfPages: [PDFWriter.Page] = []
-                for build in builders {
-                    try pdfPages.append(build(ocr))
+                // OCR dominates assembly and pages are independent: build
+                // them on three workers, each taking every third page into
+                // its own slot. Three because Vision peaks at ~170 MB per
+                // 300 dpi page (~450 MB at 600); one per core could spike
+                // to gigabytes.
+                var built = [Result<PDFWriter.Page, Error>?](
+                    repeating: nil, count: builders.count
+                )
+                built.withUnsafeMutableBufferPointer { buffer in
+                    nonisolated(unsafe) let slots = buffer  // disjoint writes
+                    DispatchQueue.concurrentPerform(iterations: min(3, builders.count)) { worker in
+                        for i in stride(from: worker, to: builders.count, by: 3) {
+                            slots[i] = Result { try builders[i](ocr) }
+                        }
+                    }
                 }
+                var pdfPages = try built.map { try $0!.get() }
                 if uniform, pdfPages.count > 1 {
                     let maxW = pdfPages.map(\.naturalSizePt.w).max()!
                     let maxH = pdfPages.map(\.naturalSizePt.h).max()!
@@ -302,13 +329,14 @@ final class AppModel: ObservableObject {
                 try FileManager.default.createDirectory(
                     at: dir, withIntermediateDirectories: true
                 )
-                let dest = dir.appendingPathComponent(fileName)
-                try data.write(to: dest)
+                let dest = Archive.destination(for: title, in: dir)
+                try data.write(to: dest, options: .withoutOverwriting)
                 await MainActor.run {
                     self?.pages = []
                     self?.docName = ""
                     self?.saving = false
-                    self?.statusText = "Saved \(fileName) (\(data.count / 1024) KB)"
+                    self?.statusText =
+                        "Saved \(dest.lastPathComponent) (\(data.count / 1024) KB)"
                     NSWorkspace.shared.activateFileViewerSelecting([dest])
                 }
             } catch {

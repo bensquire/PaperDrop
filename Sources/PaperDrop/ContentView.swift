@@ -137,6 +137,7 @@ struct ContentView: View {
     ]
 
     @State private var draggingID: UUID?
+    @FocusState private var nameFieldFocused: Bool
 
     private var pageGrid: some View {
         ScrollView {
@@ -163,6 +164,12 @@ struct ContentView: View {
             }
             .padding(16)
         }
+        // A drag released between cells still ends the drag; otherwise the
+        // dragged cell stays faded.
+        .onDrop(of: [.text], isTargeted: nil) { _ in
+            draggingID = nil
+            return false
+        }
     }
 
     private var scanNextCell: some View {
@@ -188,7 +195,8 @@ struct ContentView: View {
         .buttonStyle(.plain)
         .hoverHighlight(scale: 1.01)
         .disabled(model.busy)
-        .keyboardShortcut(.defaultAction)
+        // Return in the name field saves; it must not also scan a page.
+        .keyboardShortcut(nameFieldFocused ? nil : .defaultAction)
     }
 
     private func cancelScanButton(_ title: String, large: Bool) -> some View {
@@ -210,6 +218,7 @@ struct ContentView: View {
         HStack(spacing: 12) {
             TextField("Document name", text: $model.docName)
                 .textFieldStyle(.roundedBorder)
+                .focused($nameFieldFocused)
                 .onSubmit { model.savePDF() }
             Toggle("OCR", isOn: $model.ocrEnabled)
                 .toggleStyle(.checkbox)
@@ -218,7 +227,7 @@ struct ContentView: View {
                 .toggleStyle(.checkbox)
                 .help(
                     "Give every page the same size (the largest in the "
-                        + "document), centring smaller scans"
+                        + "document), keeping each scan where it sat on the bed"
                 )
             Button {
                 model.savePDF()

@@ -1,7 +1,10 @@
 import Foundation
 
 public enum ScanMode: String, CaseIterable, Sendable {
-    case blackAndWhite = "bw"  // 1-bit at the device where supported
+    /// 1-bit at the device under ICC. SANE scans gray instead: lineart
+    /// support varies by backend (the LiDE 110 has none) and the pipeline
+    /// thresholds anyway.
+    case blackAndWhite = "bw"
     case gray
     case color
 }
@@ -45,6 +48,29 @@ public struct ScannerInfo: Identifiable, Sendable {
         let common = zip(na.reversed(), nb.reversed()).prefix { $0 == $1 }.count
         return common >= 6
     }
+
+    /// This scanner in a fresh device list: the same model, preferring the
+    /// same ID. SANE IDs carry a USB address that changes between sessions,
+    /// so the ID alone is not enough — and another model is never a match.
+    public func match(in list: [ScannerInfo]) -> ScannerInfo? {
+        let candidates = list.filter { Self.sameModel($0.name, name) }
+        return candidates.first { $0.id == id } ?? candidates.first
+    }
+
+    /// One list from both backends. The same USB device often appears via
+    /// both under different spellings; the SANE twin wins (ICC cannot open
+    /// devices whose vendor driver is dead) and drops its " (SANE)" suffix,
+    /// which only exists to tell twins apart.
+    public static func merge(sane: [ScannerInfo], icc: [ScannerInfo]) -> [ScannerInfo] {
+        let saneDevices = sane.map { dev in
+            icc.contains { sameModel($0.name, dev.name) }
+                ? ScannerInfo(id: dev.id, name: dev.baseName) : dev
+        }
+        let iccOnly = icc.filter { dev in
+            !sane.contains { sameModel($0.name, dev.name) }
+        }
+        return saneDevices + iccOnly
+    }
 }
 
 public struct ScannerCapabilities: Sendable {
@@ -85,10 +111,4 @@ public protocol ScannerBackend {
     /// Cancel a running scan, recovering the device if needed.
     /// Returns true when the device is believed healthy afterwards.
     func cancelScan(scannerName: String) async -> Bool
-}
-
-public extension ScannerBackend {
-    func cancelScan(scannerName _: String) async -> Bool {
-        false
-    }
 }

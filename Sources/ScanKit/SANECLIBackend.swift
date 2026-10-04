@@ -13,12 +13,8 @@ public final class SANECLIBackend: ScannerBackend {
     private var currentScanProcess: Process?
     private var cancelRequested = false
 
-    /// Synchronous locked access — NSLock.lock is not callable directly
-    /// from async contexts.
-    private func withProcessLock<T>(_ body: () -> T) -> T {
-        processLock.lock()
-        defer { processLock.unlock() }
-        return body()
+    private var isCancelled: Bool {
+        processLock.withLock { cancelRequested }
     }
 
     public init() {
@@ -54,7 +50,13 @@ public final class SANECLIBackend: ScannerBackend {
                 timeout: max(timeout, 15)
             )
         else { return [] }
-        return out.split(separator: "\n").compactMap { line in
+        return Self.parseDeviceList(out)
+    }
+
+    /// Parses `scanimage -f "%d|%v %m%n"` output: one "device|vendor model"
+    /// line per scanner.
+    static func parseDeviceList(_ out: String) -> [ScannerInfo] {
+        out.split(separator: "\n").compactMap { line in
             let parts = line.split(separator: "|", maxSplits: 1)
             guard parts.count == 2 else { return nil }
             return ScannerInfo(id: "sane:" + parts[0], name: parts[1] + " (SANE)")
@@ -91,31 +93,25 @@ public final class SANECLIBackend: ScannerBackend {
         }
     }
 
-    /// libusb device addresses change on every replug (and after legacy
-    /// vendor drivers are killed), so stored IDs go stale. Re-resolve the
-    /// current device string by model name at scan time.
+    /// libusb device addresses change on every replug, after legacy vendor
+    /// drivers are killed, and (LiDE 110) after every session, so stored
+    /// IDs go stale. Re-resolve the current device string at scan time.
     private func resolveDevice(matching scanner: ScannerInfo) async -> String? {
-        let current = await discover(timeout: 15)
-        if let exact = current.first(where: { $0.id == scanner.id }) {
-            return String(exact.id.dropFirst(5))
-        }
-        if let byName = current.first(where: {
-            ScannerInfo.sameModel($0.name, scanner.name)
-        }) {
-            return String(byName.id.dropFirst(5))
-        }
-        return current.count == 1 ? String(current[0].id.dropFirst(5)) : nil
+        scanner.match(in: await discover(timeout: 15))
+            .map { String($0.id.dropFirst(5)) }
     }
 
     /// Cancel the running scan and reset the scanner's USB device —
     /// terminating scanimage mid-pass wedges the hardware, and only a
     /// re-enumeration (or physical replug) recovers it.
     public func cancelScan(scannerName: String) async -> Bool {
-        let p = withProcessLock { () -> Process? in
+        let p = processLock.withLock { () -> Process? in
             cancelRequested = true
             return currentScanProcess
         }
-        guard let p, p.isRunning else { return false }
+        // Not mid-pass (still resolving the device, or between retries):
+        // the flag stops the scan before it starts, and nothing is wedged.
+        guard let p, p.isRunning else { return true }
         p.terminate()
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         let tokens = ScannerInfo(id: "", name: scannerName).baseName
@@ -132,38 +128,54 @@ public final class SANECLIBackend: ScannerBackend {
         with scanner: ScannerInfo, config: ScanConfig,
         to directory: URL
     ) async throws -> URL {
-        withProcessLock { cancelRequested = false }
+        processLock.withLock { cancelRequested = false }
         // resolveDevice → discover already releases any hijacked USB device.
-        guard let device = await resolveDevice(matching: scanner) else {
+        guard var device = await resolveDevice(matching: scanner) else {
             throw ScanError.scanFailed(
                 "Scanner not found — check it is connected and powered"
             )
         }
         var lastError: Error = ScanError.scanFailed("scan did not run")
         for attempt in 1...3 {
+            if isCancelled {
+                throw ScanError.cancelled
+            }
+            let url: URL
             do {
-                return try await scanOnce(
+                url = try await scanOnce(
                     device: device, config: config,
                     to: directory
                 )
             } catch {
-                if withProcessLock({ cancelRequested }) {
+                if isCancelled {
                     throw ScanError.cancelled
                 }
                 lastError = error
                 let msg = error.localizedDescription
-                // Stale/claimed device: release and retry. Anything else
-                // (paper jam, cancel) fails immediately.
+                // Stale/claimed device: release, re-resolve and retry.
+                // Anything else (paper jam, cancel) fails immediately.
                 guard
                     msg.contains("Invalid argument")
                         || msg.contains("Device busy")
                         || msg.contains("failed: Error during device I/O")
                 else { throw error }
                 if attempt < 3 {
-                    await releaseHijackedUSB()
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    // The address may have moved since it was resolved
+                    // (re-enumeration); this also releases a hijack.
+                    if let fresh = await resolveDevice(matching: scanner) {
+                        device = fresh
+                    }
                 }
+                continue
             }
+            // A cancel that raced the launch lets the pass finish (killing
+            // it would wedge the scanner); drop its page.
+            if isCancelled {
+                try? FileManager.default.removeItem(at: url)
+                throw ScanError.cancelled
+            }
+            return url
         }
         throw lastError
     }
@@ -216,7 +228,7 @@ public final class SANECLIBackend: ScannerBackend {
                 p.environment = saneEnvironment
             }
             if track {
-                withProcessLock { currentScanProcess = p }
+                processLock.withLock { currentScanProcess = p }
             }
             // Enforce the timeout (probes can hang when a legacy driver
             // holds the USB device). Scans pass a generous timeout — never
@@ -226,33 +238,56 @@ public final class SANECLIBackend: ScannerBackend {
                     p.terminate()
                 }
             }
+            // Drain both pipes while the process runs: a child blocks once
+            // it fills the 64 KB pipe buffer (`ioreg -l` writes ~100 KB),
+            // so reading only after exit deadlocks until the timeout.
+            let stdout = PipeDrain(out), stderr = PipeDrain(err)
             p.terminationHandler = { [weak self] proc in
                 if track, let self {
-                    self.withProcessLock { self.currentScanProcess = nil }
+                    self.processLock.withLock { self.currentScanProcess = nil }
                 }
-                let stdout =
-                    String(
-                        data: out.fileHandleForReading.readDataToEndOfFile(),
-                        encoding: .utf8
-                    ) ?? ""
                 if proc.terminationStatus == 0 {
-                    cont.resume(returning: stdout)
+                    cont.resume(returning: stdout.text)
                 } else {
-                    let stderr =
-                        String(
-                            data: err.fileHandleForReading.readDataToEndOfFile(),
-                            encoding: .utf8
-                        ) ?? ""
+                    let message = stderr.text
                     cont.resume(
                         throwing: ScanError.scanFailed(
-                            stderr.isEmpty ? "scanimage exit \(proc.terminationStatus)" : stderr
+                            message.isEmpty ? "scanimage exit \(proc.terminationStatus)" : message
                         )
                     )
                 }
             }
             do { try p.run() } catch {
+                // Never launched: close the write ends so the drains see EOF.
+                try? out.fileHandleForWriting.close()
+                try? err.fileHandleForWriting.close()
+                if track {
+                    processLock.withLock { currentScanProcess = nil }
+                }
                 cont.resume(throwing: ScanError.scanFailed(error.localizedDescription))
             }
         }
+    }
+}
+
+/// Reads a pipe to EOF on a background queue, so the writer never blocks
+/// on a full pipe buffer.
+private final class PipeDrain: @unchecked Sendable {
+    private var data = Data()
+    private let done = DispatchGroup()
+
+    init(_ pipe: Pipe) {
+        DispatchQueue.global().async(group: done) { [self] in
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            // Close now: the timeout closure keeps the Process (and so the
+            // Pipe) alive for up to 20 minutes after a scan.
+            try? pipe.fileHandleForReading.close()
+        }
+    }
+
+    /// Everything the writer produced; blocks until it closes the pipe.
+    var text: String {
+        done.wait()
+        return String(data: data, encoding: .utf8) ?? ""
     }
 }
