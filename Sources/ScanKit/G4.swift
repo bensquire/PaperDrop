@@ -59,8 +59,12 @@ public enum G4 {
                 ? a << 24 | b << 16 | c << 8 | d
                 : d << 24 | c << 16 | b << 8 | a
         }
+        // Every read below stays inside the data: the directory's entry
+        // count, then its 12-byte entries.
         let ifd = u32(4)
+        guard ifd >= 8, ifd + 2 <= tiff.count else { throw fail("bad directory offset") }
         let count = u16(ifd)
+        guard ifd + 2 + count * 12 <= tiff.count else { throw fail("truncated directory") }
         var width = 0, height = 0, photometric = 0, compression = 0, fillOrder = 1
         var stripOffset = -1, stripBytes = -1, stripCount = 0
         for i in 0..<count {

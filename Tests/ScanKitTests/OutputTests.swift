@@ -63,6 +63,22 @@ final class G4Tests: XCTestCase {
             stream.data.count, page.packed.count,
             "G4 should compress a mostly-white page")
     }
+
+    func test_extractStream_refusesADirectoryOutsideTheData() {
+        // Arrange — little-endian TIFF headers whose directory, or whose
+        // entries, lie past the end of the data
+        let tiffs: [(what: String, data: Data)] = [
+            ("a directory offset past the end", Data([0x49, 0x49, 0x2A, 0, 0xFF, 0xFF, 0, 0, 0, 0])),
+            ("five entries in two bytes", Data([0x49, 0x49, 0x2A, 0, 0x08, 0, 0, 0, 0x05, 0])),
+        ]
+
+        // Act / Assert
+        for tiff in tiffs {
+            XCTAssertThrowsError(
+                try G4.extractStream(fromTIFF: tiff.data),
+                "a TIFF with \(tiff.what) should be refused, not read")
+        }
+    }
 }
 
 final class PDFWriterTests: XCTestCase {
