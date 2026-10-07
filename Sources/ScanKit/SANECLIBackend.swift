@@ -224,7 +224,7 @@ public final class SANECLIBackend: ScannerBackend {
         // Generous timeout: killing scanimage mid-pass wedges the scanner.
         _ = try await runAsync(scanimage, args, timeout: 1200, track: true)
         guard FileManager.default.fileExists(atPath: dest.path) else {
-            throw ScanError.scanFailed("scanimage produced no file")
+            throw ScanError.noPage
         }
         return dest
     }

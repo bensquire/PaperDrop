@@ -133,6 +133,10 @@ private final class DeviceBrowser: NSObject, ICDeviceBrowserDelegate, @unchecked
     override init() {
         super.init()
         browser.delegate = self
+        // The docs build this by OR-ing type and location masks, and an imported C
+        // enum takes any raw value, so it never fails.
+        // /documentation/imagecapturecore/icdevicebrowser/browseddevicetypemask
+        // swift-format-ignore: NeverForceUnwrap
         browser.browsedDeviceTypeMask = ICDeviceTypeMask(
             rawValue: ICDeviceTypeMask.scanner.rawValue
                 | ICDeviceLocationTypeMask.local.rawValue
@@ -452,7 +456,7 @@ private final class ScanSession: NSObject, ICScannerDeviceDelegate, @unchecked S
         } else if let url = lock.withLock({ scannedURL }) {
             cont.resume(returning: url)
         } else {
-            cont.resume(throwing: ScanError.scanFailed("No file produced"))
+            cont.resume(throwing: ScanError.noPage)
         }
     }
 }

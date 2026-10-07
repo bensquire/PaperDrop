@@ -1,3 +1,4 @@
+import ScanKit
 import SwiftUI
 
 @main
@@ -8,8 +9,9 @@ struct PaperDropApp: App {
         WindowGroup("PaperDrop") {
             ContentView(model: model)
         }
-        // Hides the title text; the window keeps its name for the Window
-        // menu and Mission Control.
+        // Hides the title and the title bar's backing
+        // (/documentation/swiftui/windowstyle/hiddentitlebar); the window
+        // keeps its name for the Window menu and Mission Control.
         .windowStyle(.hiddenTitleBar)
         .commands {
             // Replaces File > New Window, which took ⌘N from Scan Page and
@@ -50,6 +52,9 @@ struct SettingsView: View {
     @Bindable var model: AppModel
     @State private var choosingFolder = false
 
+    /// The sizes a page can snap to, from the table that does the snapping.
+    private let snapSizes = Pipeline.paperSizesMM.map(\.name).joined(separator: "/")
+
     var body: some View {
         // The grouped style is System Settings' own look
         // (/documentation/swiftui/formstyle/grouped).
@@ -57,10 +62,7 @@ struct SettingsView: View {
             Picker("Default resolution", selection: $model.defaultDpi) {
                 ForEach(model.availableDPIs, id: \.self) { Text("\($0) dpi").tag($0) }
             }
-            Toggle(
-                "Snap pages to standard paper sizes (A4/A5/A6/Letter)",
-                isOn: $model.paperSnap
-            )
+            Toggle("Snap pages to standard paper sizes (\(snapSizes))", isOn: $model.paperSnap)
             Toggle("Add searchable text layer (OCR)", isOn: $model.ocrEnabled)
             Toggle(
                 "Uniform page size across a document",

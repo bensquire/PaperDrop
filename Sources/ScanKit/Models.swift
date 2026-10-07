@@ -86,6 +86,7 @@ public enum ScanError: LocalizedError {
     case noDevice
     case sessionFailed(String)
     case scanFailed(String)
+    case noPage
     case cancelled
 
     public var errorDescription: String? {
@@ -93,6 +94,7 @@ public enum ScanError: LocalizedError {
         case .noDevice: "No scanner found"
         case let .sessionFailed(s): "Could not open scanner session: \(s)"
         case let .scanFailed(s): "Scan failed: \(s)"
+        case .noPage: "The scanner finished without sending a page. Try scanning again."
         case .cancelled: "Scan cancelled"
         }
     }

@@ -45,7 +45,9 @@ final class OtsuTests: XCTestCase {
         let t = Pipeline.otsuThreshold(gray)
 
         // Assert
-        XCTAssertTrue(t > 20 && t <= 230)
+        XCTAssertTrue(
+            t > 20 && t <= 230,
+            "threshold \(t) should fall between the ink (20) and the paper (230)")
     }
 }
 
@@ -95,9 +97,11 @@ final class CleanComponentsTests: XCTestCase {
 final class SpeckThresholdTests: XCTestCase {
     func test_minSpeck_scalesWithResolutionByArea() {
         // Arrange / Act / Assert — 4 px at 300 dpi, by area, at least 2
-        XCTAssertEqual(Pipeline.minSpeck(dpi: 150), 2)
-        XCTAssertEqual(Pipeline.minSpeck(dpi: 300), 4)
-        XCTAssertEqual(Pipeline.minSpeck(dpi: 600), 16)
+        for (resolution, dust) in [(150, 2), (300, 4), (600, 16)] {
+            XCTAssertEqual(
+                Pipeline.minSpeck(dpi: resolution), dust,
+                "dust size at \(resolution) dpi should be \(dust) px")
+        }
     }
 
     func test_cleanComponents_keepsAFullStopAt150dpi() {
@@ -124,16 +128,20 @@ final class ResolutionTests: XCTestCase {
             from: Pipeline.ProcessedPage(
                 width: 8, height: 8, dpi: 150,
                 originX: 0, originY: 0, packed: Data(repeating: 0xFF, count: 8)))
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".tiff")
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("scan.tiff")
         try tiff.write(to: url)
-        defer { try? FileManager.default.removeItem(at: url) }
 
         // Act
         let dpi = Pipeline.resolution(of: url)
 
         // Assert
-        XCTAssertEqual(dpi, 150)
+        XCTAssertEqual(
+            dpi, 150,
+            "the page should be sized by the 150 dpi the file records, not the 200 asked for")
     }
 }
 
@@ -150,7 +158,7 @@ final class ContentCropTests: XCTestCase {
         let crop = Pipeline.contentCrop(cleanedBinary(gray), dpi: dpi)
 
         // Assert
-        let c = try XCTUnwrap(crop)
+        let c = try XCTUnwrap(crop, "a page with ink should have a crop")
         XCTAssertEqual(mm(c.x1 - c.x0), 210, accuracy: 3, "width should snap to A4")
         XCTAssertEqual(mm(c.y1 - c.y0), 297, accuracy: 3, "height should snap to A4")
     }
@@ -168,8 +176,10 @@ final class ContentCropTests: XCTestCase {
         let crop = Pipeline.contentCrop(cleanedBinary(gray), dpi: dpi)
 
         // Assert — metric A4 must win over Letter
-        let c = try XCTUnwrap(crop)
-        XCTAssertEqual(mm(c.y1 - c.y0), 297, accuracy: 3)
+        let c = try XCTUnwrap(crop, "a page with ink should have a crop")
+        XCTAssertEqual(
+            mm(c.y1 - c.y0), 297, accuracy: 3,
+            "height should snap to A4 (297 mm), not Letter (279)")
     }
 
     func test_contentCrop_prefersA4OverLetterForShortContent() throws {
@@ -185,9 +195,13 @@ final class ContentCropTests: XCTestCase {
         let crop = Pipeline.contentCrop(cleanedBinary(gray), dpi: dpi)
 
         // Assert — the content fits A4, so A4 wins over Letter
-        let c = try XCTUnwrap(crop)
-        XCTAssertEqual(mm(c.x1 - c.x0), 210, accuracy: 3)
-        XCTAssertEqual(mm(c.y1 - c.y0), 297, accuracy: 3)
+        let c = try XCTUnwrap(crop, "a page with ink should have a crop")
+        XCTAssertEqual(
+            mm(c.x1 - c.x0), 210, accuracy: 3,
+            "width should snap to A4 (210 mm), not Letter (216)")
+        XCTAssertEqual(
+            mm(c.y1 - c.y0), 297, accuracy: 3,
+            "height should snap to A4 (297 mm), not Letter (279)")
     }
 
     func test_contentCrop_snapsContentWiderThanA4ToLetter() throws {
@@ -202,9 +216,11 @@ final class ContentCropTests: XCTestCase {
         let crop = Pipeline.contentCrop(cleanedBinary(gray), dpi: dpi)
 
         // Assert — only Letter holds it
-        let c = try XCTUnwrap(crop)
-        XCTAssertEqual(mm(c.x1 - c.x0), 216, accuracy: 3)
-        XCTAssertEqual(mm(c.y1 - c.y0), 279, accuracy: 3)
+        let c = try XCTUnwrap(crop, "a page with ink should have a crop")
+        XCTAssertEqual(
+            mm(c.x1 - c.x0), 216, accuracy: 3,
+            "width should snap to Letter (216 mm); A4's 210 is too narrow")
+        XCTAssertEqual(mm(c.y1 - c.y0), 279, accuracy: 3, "height should snap to Letter (279 mm)")
     }
 
     func test_contentCrop_fixedSizeRotatesWhenContentCannotFit() throws {
@@ -221,9 +237,11 @@ final class ContentCropTests: XCTestCase {
             fixedMM: (w: 127, h: 177.8))
 
         // Assert — rotated to landscape, the only way the content fits
-        let c = try XCTUnwrap(crop)
-        XCTAssertEqual(mm(c.x1 - c.x0), 177.8, accuracy: 3)
-        XCTAssertEqual(mm(c.y1 - c.y0), 127, accuracy: 3)
+        let c = try XCTUnwrap(crop, "a page with ink should have a crop")
+        XCTAssertEqual(
+            mm(c.x1 - c.x0), 177.8, accuracy: 3,
+            "width should be 5×7's long side: it fits only landscape")
+        XCTAssertEqual(mm(c.y1 - c.y0), 127, accuracy: 3, "height should be 5×7's short side (127 mm)")
     }
 
     func test_contentCrop_fixedA4KeepsPortraitForWideInk() throws {
@@ -242,9 +260,11 @@ final class ContentCropTests: XCTestCase {
 
         // Assert — full-height portrait page, not a landscape band that
         // discards the bottom third of the sheet
-        let c = try XCTUnwrap(crop)
-        XCTAssertEqual(mm(c.x1 - c.x0), 210, accuracy: 3)
-        XCTAssertEqual(mm(c.y1 - c.y0), 297, accuracy: 3)
+        let c = try XCTUnwrap(crop, "a page with ink should have a crop")
+        XCTAssertEqual(mm(c.x1 - c.x0), 210, accuracy: 3, "width should be portrait A4 (210 mm)")
+        XCTAssertEqual(
+            mm(c.y1 - c.y0), 297, accuracy: 3,
+            "height should be portrait A4 (297 mm), not a 210 mm band")
     }
 
     func test_contentCrop_fixedSizeHonoursRequestedLandscape() throws {
@@ -261,9 +281,9 @@ final class ContentCropTests: XCTestCase {
             fixedMM: (w: 210, h: 148))
 
         // Assert — the requested orientation wins over the ink's shape
-        let c = try XCTUnwrap(crop)
-        XCTAssertEqual(mm(c.x1 - c.x0), 210, accuracy: 3)
-        XCTAssertEqual(mm(c.y1 - c.y0), 148, accuracy: 3)
+        let c = try XCTUnwrap(crop, "a page with ink should have a crop")
+        XCTAssertEqual(mm(c.x1 - c.x0), 210, accuracy: 3, "width should be landscape A5 (210 mm), as asked")
+        XCTAssertEqual(mm(c.y1 - c.y0), 148, accuracy: 3, "height should be landscape A5 (148 mm), as asked")
     }
 
     func test_contentCrop_keepsDistantSparseContent() throws {
@@ -279,7 +299,7 @@ final class ContentCropTests: XCTestCase {
         let crop = Pipeline.contentCrop(cleanedBinary(gray), dpi: dpi)
 
         // Assert — crop must extend past the distant mark's top edge
-        let c = try XCTUnwrap(crop)
+        let c = try XCTUnwrap(crop, "a page with ink should have a crop")
         XCTAssertGreaterThanOrEqual(mm(c.y1), 208, "distant mark must be inside the crop")
     }
 
@@ -298,13 +318,15 @@ final class ContentCropTests: XCTestCase {
 final class PaperSizeNameTests: XCTestCase {
     func test_paperSizeName_namesStandardAndPhotoSizes() {
         // Arrange / Act / Assert
-        XCTAssertEqual(Pipeline.paperSizeName(widthMM: 210, heightMM: 297), "A4")
-        XCTAssertEqual(Pipeline.paperSizeName(widthMM: 148, heightMM: 210), "A5")
-        XCTAssertEqual(Pipeline.paperSizeName(widthMM: 101.6, heightMM: 152.4), "4×6″")
-        XCTAssertEqual(
-            Pipeline.paperSizeName(widthMM: 152.4, heightMM: 101.6),
-            "4×6″ landscape")
-        XCTAssertNil(Pipeline.paperSizeName(widthMM: 100, heightMM: 100))
+        let sizes: [(w: Double, h: Double, name: String?)] = [
+            (210, 297, "A4"), (148, 210, "A5"), (101.6, 152.4, "4×6″"),
+            (152.4, 101.6, "4×6″ landscape"), (100, 100, nil),
+        ]
+        for size in sizes {
+            XCTAssertEqual(
+                Pipeline.paperSizeName(widthMM: size.w, heightMM: size.h), size.name,
+                "name for \(size.w) × \(size.h) mm")
+        }
     }
 }
 
@@ -321,7 +343,11 @@ final class ProcessDocumentTests: XCTestCase {
         let page = Pipeline.processDocument(gray, dpi: dpi)
 
         // Assert — origin ≈ content position minus the 8mm margin
-        XCTAssertEqual(mm(page.originX), 42, accuracy: 3)
-        XCTAssertEqual(mm(page.originY), 72, accuracy: 3)
+        XCTAssertEqual(
+            mm(page.originX), 42, accuracy: 3,
+            "x origin should be the content's 50 mm less the margin")
+        XCTAssertEqual(
+            mm(page.originY), 72, accuracy: 3,
+            "y origin should be the content's 80 mm less the margin")
     }
 }

@@ -215,7 +215,8 @@ final class AppModel {
             else {
                 throw ScanError.scanFailed("JPEG encode failed")
             }
-            let thumb = thumbnail(cg)
+            let thumb = ImageEncode.thumbnail(of: jpeg, maxPixelSize: 400)
+                .map { NSImage(cgImage: $0, size: .zero) }
             let (w, h) = (cropped.width, cropped.height)
             let origin = (
                 Double(crop.x0) / Double(dpi) * 72,
@@ -261,27 +262,6 @@ final class AppModel {
         )
     }
 
-    /// Downscaled preview — full-resolution scans must not live in the view.
-    nonisolated static func thumbnail(_ img: CGImage, maxSide: Int = 400) -> NSImage {
-        let scale = Double(maxSide) / Double(max(img.width, img.height))
-        guard scale < 1,
-            let ctx = CGContext(
-                data: nil,
-                width: Int(Double(img.width) * scale),
-                height: Int(Double(img.height) * scale),
-                bitsPerComponent: 8, bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceGray(),
-                bitmapInfo: CGImageAlphaInfo.none.rawValue
-            )
-        else { return NSImage(cgImage: img, size: .zero) }
-        ctx.interpolationQuality = .high
-        ctx.draw(img, in: CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
-        guard let small = ctx.makeImage() else {
-            return NSImage(cgImage: img, size: .zero)
-        }
-        return NSImage(cgImage: small, size: .zero)
-    }
-
     nonisolated static func mmLabel(_ w: Int, _ h: Int, _ dpi: Int) -> String {
         let mmW = Double(w) / Double(dpi) * 25.4
         let mmH = Double(h) / Double(dpi) * 25.4
@@ -320,10 +300,16 @@ final class AppModel {
                         }
                     }
                 }
-                var pdfPages = try built.map { try $0!.get() }
-                if uniform, pdfPages.count > 1 {
-                    let maxW = pdfPages.map(\.naturalSizePt.w).max()!
-                    let maxH = pdfPages.map(\.naturalSizePt.h).max()!
+                var pdfPages = try built.map { slot in
+                    guard let slot else {
+                        throw ScanError.scanFailed("A page was not assembled")
+                    }
+                    return try slot.get()
+                }
+                if uniform, pdfPages.count > 1,
+                    let maxW = pdfPages.map(\.naturalSizePt.w).max(),
+                    let maxH = pdfPages.map(\.naturalSizePt.h).max()
+                {
                     for i in pdfPages.indices {
                         pdfPages[i].pageSizePt = (maxW, maxH)
                     }
@@ -332,7 +318,7 @@ final class AppModel {
                 try FileManager.default.createDirectory(
                     at: dir, withIntermediateDirectories: true
                 )
-                let dest = Archive.destination(for: title, in: dir)
+                let dest = Archive.destination(for: title, in: dir, untitledDate: Date())
                 try data.write(to: dest, options: .withoutOverwriting)
                 await MainActor.run {
                     self?.pages = []
