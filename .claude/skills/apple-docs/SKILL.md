@@ -15,7 +15,7 @@ Nothing leaves the machine. It is the reference for the
 
 - Before calling an API whose signature, availability or behaviour you are not
   certain of. Do not guess at a modifier's name or what it does; look. The
-  deployment target is macOS 13, so check a symbol's availability too.
+  deployment target is macOS 26, so check a symbol's availability too.
 - Before building anything the system might already provide (a panel, a picker,
   a preview, a menu placement, a scanner UI). Search first; the answer is
   usually a framework the app already links.

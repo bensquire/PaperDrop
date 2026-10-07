@@ -87,8 +87,8 @@ make release   # signed DMG (+ notarization if a `paperdrop` keychain
                # profile is stored)
 ```
 
-A pre-commit hook (`git config core.hooksPath .githooks`) runs lint +
-tests + a Python compile check.
+A pre-commit hook (`git config core.hooksPath .githooks`) runs `make lint`
+and `make test`.
 
 ## Project layout
 

@@ -1,6 +1,6 @@
 // Generates the PaperDrop app icon (AudiobookForge visual style: flat
 // vivid tile, bold white glyph, soft shadows) at all required sizes.
-// Run: swift icon/makeicon.swift   (from apps/PaperDrop/)
+// Run: swift icon/makeicon.swift   (from the repo root)
 import CoreGraphics
 import Foundation
 import ImageIO
